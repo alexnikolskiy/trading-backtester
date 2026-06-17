@@ -18,7 +18,7 @@ Use this skill when working on files in:
 | File | Symbols |
 |------|---------|
 | `apps/backtester/src/engine/artifacts.ts` | CloseReason |
-| `apps/backtester/src/engine/portfolio.ts` | pos, exitFee, exitFillPrice, entryFeeClosed, isProtection, ... |
+| `apps/backtester/src/engine/portfolio.ts` | fraction, pos, order, isPartial, isProtection, ... |
 
 ## Connected Communities
 
@@ -27,7 +27,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-65"
+get_communities with id: "community-74"
 smart_context with task: "understand src/engine · buildTrade", format: "gcx"
 ```
 

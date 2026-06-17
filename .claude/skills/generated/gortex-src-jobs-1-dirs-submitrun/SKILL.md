@@ -20,10 +20,10 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/jobs/fingerprint.ts` | req, requestFingerprint, normalized |
-| `apps/backtester/src/jobs/job-store.ts` | idempotentReplay, toHandle, job, ev, appendEvent, ... |
-| `apps/backtester/src/jobs/pg-job-store.ts` | EventDbRow, rowToEvent, r |
-| `apps/backtester/src/jobs/submit.ts` | validate, rest, deps, fingerprint, job, ... |
+| `apps/backtester/src/jobs/fingerprint.ts` | requestFingerprint, normalized, req |
+| `apps/backtester/src/jobs/job-store.ts` | appendEvent, toHandle, ev, idempotentReplay, job, ... |
+| `apps/backtester/src/jobs/pg-job-store.ts` | rowToEvent, r, EventDbRow |
+| `apps/backtester/src/jobs/submit.ts` | SubmitDeps, created, deps, unknown, storedBundleHash, ... |
 | `packages/client/src/wire.ts` | RunSubmitRequest |
 
 ## Entry Points
@@ -38,7 +38,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-91"
+get_communities with id: "community-123"
 smart_context with task: "understand src/jobs +1 dirs · submitRun", format: "gcx"
 find_usages with id: "apps/backtester/src/jobs/submit.ts::submitRun", format: "gcx"
 ```

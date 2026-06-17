@@ -20,16 +20,15 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/context.ts` | tape, base, constructor, ContextBuilderBase |
+| `apps/backtester/src/engine/context.ts` | ContextBuilderBase, base, tape, constructor |
 | `apps/backtester/src/engine/dataset.ts` | candles, c, symbol |
-| `apps/backtester/src/engine/market-access.ts` | fundingReadingAt, minuteTs, snap, oiPoint, fundingPoint, ... |
-| `apps/backtester/src/engine/market-tape.ts` | at, events, symbol, found, openInterest, ... |
-| `packages/research-contracts/src/research/market-tape.ts` | TakerSnapshot, FundingSnapshot, TakerPoint, FundingReading, LiqPoint, ... |
+| `apps/backtester/src/engine/market-access.ts` | start, takerPoint, snap, symbol, k, ... |
+| `apps/backtester/src/engine/market-tape.ts` | found, taker, taker, symbol, events, ... |
+| `packages/research-contracts/src/research/market-tape.ts` | LiqPoint, OiPoint, PointInTimeMarketApi, TakerPoint, MarketTape, ... |
 
 ## Entry Points
 
 - `apps/backtester/src/engine/market-access.ts::pointInTimeMarketApi`
-- `apps/backtester/src/engine/context.ts::PointInTimeContextBuilder.constructor`
 
 ## Connected Communities
 
@@ -38,7 +37,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-56"
+get_communities with id: "community-65"
 smart_context with task: "understand src/engine +1 dirs · pointInTimeMarketApi", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/market-access.ts::pointInTimeMarketApi", format: "gcx"
 ```

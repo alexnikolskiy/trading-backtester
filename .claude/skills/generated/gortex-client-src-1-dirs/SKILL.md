@@ -19,8 +19,8 @@ Use this skill when working on files in:
 | File | Symbols |
 |------|---------|
 | `apps/backtester/src/engine/validation/validate-run-request.ts` | RunRequestInput |
-| `packages/client/src/client.ts` | getCapabilities, BacktesterClientOptions, cancelRun, init, message, ... |
-| `packages/client/src/wire.ts` | ArtifactPage, RunJobHandle, CapabilityDescriptor, ValidationReport, ArtifactManifest, ... |
+| `packages/client/src/client.ts` | listDatasets, BacktesterClient, raise, getCapabilities, res, ... |
+| `packages/client/src/wire.ts` | ArtifactManifest, ValidationReport, RunJobHandle, ArtifactPage, RunResultSummary, ... |
 
 ## Entry Points
 
@@ -29,7 +29,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-113"
+get_communities with id: "community-150"
 smart_context with task: "understand client/src +1 dirs", format: "gcx"
 find_usages with id: "packages/client/src/client.ts::BacktesterClient.readArtifact", format: "gcx"
 ```

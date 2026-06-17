@@ -67,7 +67,13 @@ export interface SandboxOverlayDirs {
   readonly eeDir: string;
 }
 
-/** Registry + sandbox-aware router built over the materialized overlay bundle. */
+/** Materialized bundle dir for the sandbox baseline-only (sandboxed STRATEGY) run. */
+export interface SandboxStrategyDirs {
+  /** `short_after_pump` strategy bundle dir (materialized + world-readable). */
+  readonly spDir: string;
+}
+
+/** Registry + sandbox-aware router built over a materialized bundle. */
 export interface SandboxOverlayDeps {
   readonly registry: ModuleRegistry019;
   readonly router: ExecutorRouter;
@@ -93,6 +99,39 @@ export function buildSandboxOverlayDeps(dirs: SandboxOverlayDirs): SandboxOverla
   const registry = createModuleRegistry({
     strategies: [shortAfterPump],
     overlayBundles: [loadBundle(dirs.eeDir)],
+    riskProfiles: [DEFAULT_RISK],
+    executionProfiles: [DEFAULT_EXEC],
+    sandboxPolicies: [policy],
+  });
+
+  const router = createExecutorRouter({
+    sandboxPolicies: createSandboxPolicyRegistry([policy]),
+    sandboxPolicyRef: { id: policy.id, version: policy.version },
+    sandboxDeps: { harnessDir: config.overlaySandbox.harnessDir },
+  });
+
+  return { registry, router };
+}
+
+/**
+ * Build the registry + sandbox executor router for a BASELINE-ONLY run with a SANDBOXED STRATEGY.
+ *
+ * TOPOLOGY (mirrors the platform reference verify_020_equivalence.mjs): the `short_after_pump`
+ * STRATEGY is an untrusted `strategyBundle` (→ inert proxy, provenance `bundle`) and there are NO
+ * overlays. A baseline-only request resolves to a SINGLE target, so the symbol-keyed session is
+ * `open()`ed exactly once — no container-name collision (contrast the unsupported sandboxed-strategy
+ * + variant shape, which re-opens the session for the variant target while the baseline container is
+ * still alive). The strategy's `onBarClose` hook routes to a real `SandboxModuleExecutor` (container).
+ *
+ * Same router wiring as `buildSandboxOverlayDeps` (one shared policy, same harness dir). The caller
+ * owns `router.closeAll()` (session teardown / `docker rm -f`).
+ */
+export function buildSandboxStrategyBaselineDeps(dirs: SandboxStrategyDirs): SandboxOverlayDeps {
+  const config = loadConfig();
+  const policy = config.overlaySandbox.policy;
+
+  const registry = createModuleRegistry({
+    strategyBundles: [loadBundle(dirs.spDir)],
     riskProfiles: [DEFAULT_RISK],
     executionProfiles: [DEFAULT_EXEC],
     sandboxPolicies: [policy],

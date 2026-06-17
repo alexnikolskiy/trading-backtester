@@ -16,7 +16,7 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/jobs/pg-job-store.ts` | reapDeadlines, r, filter, clause, values, ... |
+| `apps/backtester/src/jobs/pg-job-store.ts` | job, nowMs, r, filter, values, ... |
 
 ## Entry Points
 
@@ -25,7 +25,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-89"
+get_communities with id: "community-121"
 smart_context with task: "understand src/jobs · rowToJob", format: "gcx"
 find_usages with id: "apps/backtester/src/jobs/pg-job-store.ts::PgJobStore.list", format: "gcx"
 ```

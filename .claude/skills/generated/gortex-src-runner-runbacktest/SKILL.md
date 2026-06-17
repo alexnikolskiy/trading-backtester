@@ -17,8 +17,8 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/runner/module-executor.ts` | out, computeSignals, series, TrustedMomentumExecutor, symbol, ... |
-| `apps/backtester/src/runner/run-backtest.ts` | deps, denom, series, candles, symbol, ... |
+| `apps/backtester/src/runner/module-executor.ts` | symbol, computeSignals, series, _seed, TrustedMomentumExecutor, ... |
+| `apps/backtester/src/runner/run-backtest.ts` | pnl, longBars, sim, candles, ret, ... |
 
 ## Entry Points
 
@@ -27,7 +27,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-94"
+get_communities with id: "community-126"
 smart_context with task: "understand src/runner · runBacktest", format: "gcx"
 find_usages with id: "apps/backtester/src/runner/run-backtest.ts::runBacktest", format: "gcx"
 ```

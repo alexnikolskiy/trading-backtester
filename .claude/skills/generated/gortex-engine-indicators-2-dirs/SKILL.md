@@ -22,8 +22,8 @@ Use this skill when working on files in:
 |------|---------|
 | `apps/backtester/src/engine/indicators/backend/adapter.ts` | IndicatorBackendAdapter |
 | `apps/backtester/src/engine/indicators/catalog.ts` | catalog, name, findDefinition |
-| `apps/backtester/src/engine/indicators/engine.ts` | args, key, valueCache, adapter, value, ... |
-| `apps/backtester/src/engine/indicators/key.ts` | name, params, parts, canonicalKey, source |
+| `apps/backtester/src/engine/indicators/engine.ts` | resolve, name, barIndex, i, valueCache, ... |
+| `apps/backtester/src/engine/indicators/key.ts` | canonicalKey, source, parts, name, params |
 | `packages/research-contracts/src/research/indicators.ts` | IndicatorRequest |
 
 ## Entry Points
@@ -37,7 +37,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-36"
+get_communities with id: "community-45"
 smart_context with task: "understand engine/indicators +2 dirs", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/indicators/engine.ts::createIndicatorEngine", format: "gcx"
 ```

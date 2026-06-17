@@ -26,8 +26,8 @@ export function validateBundle(input: unknown): BundleIssue[] {
   if (!m || typeof m.id !== 'string' || typeof m.version !== 'string') {
     issues.push({ code: 'schema_invalid', message: 'manifest {id, version} is required' });
   }
-  if (m && m.kind !== 'strategy') {
-    issues.push({ code: 'unsupported_module_kind', message: 'manifest.kind must be "strategy"' });
+  if (m && m.kind !== 'strategy' && m.kind !== 'overlay') {
+    issues.push({ code: 'unsupported_module_kind', message: 'manifest.kind must be "strategy" or "overlay"' });
   }
   if (m && m.bundleContractVersion !== BUNDLE_CONTRACT_VERSION) {
     issues.push({

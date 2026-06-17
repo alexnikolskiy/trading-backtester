@@ -1,11 +1,11 @@
 ---
 name: gortex-src-jobs-1-dirs-processnextqueued
-description: "Work in the src/jobs +1 dirs · processNextQueued area — 69 symbols across 5 files (83% cohesion)"
+description: "Work in the src/jobs +1 dirs · processNextQueued area — 69 symbols across 5 files (82% cohesion)"
 ---
 
 # src/jobs +1 dirs · processNextQueued
 
-69 symbols | 5 files | 83% cohesion
+69 symbols | 5 files | 82% cohesion
 
 ## When to Use
 
@@ -20,26 +20,26 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/jobs/job-store.ts` | get, job, ok, runId, nowMs, ... |
-| `apps/backtester/src/jobs/overlay-summary.ts` | outcome, runId, datasetFingerprint, resultHash, toOverlaySummary, ... |
-| `apps/backtester/src/jobs/pg-job-store.ts` | runId, from, patch, entry, to, ... |
-| `apps/backtester/src/jobs/worker.ts` | from, processed, drainQueue, deps, periodMs, ... |
-| `packages/client/src/wire.ts` | RunPeriod, ArtifactReference |
+| `apps/backtester/src/jobs/job-store.ts` | row, nowMs, next, existingRunId, job, ... |
+| `apps/backtester/src/jobs/overlay-summary.ts` | headline, resultHash, datasetFingerprint, toOverlaySummary, evidence, ... |
+| `apps/backtester/src/jobs/pg-job-store.ts` | r, runId, entry, transition, patch, ... |
+| `apps/backtester/src/jobs/worker.ts` | r, deps, reader, tsTo, outcome, ... |
+| `packages/client/src/wire.ts` | ArtifactReference, RunPeriod |
 
 ## Entry Points
 
 - `apps/backtester/src/jobs/worker.ts::processNextQueued`
-- `apps/backtester/src/jobs/job-store.ts::InMemoryJobStore.insertOrGet`
 
 ## Connected Communities
 
 - **src/jobs +1 dirs · transition** (2 cross-edges)
+- **src/engine · createExecutorRouter** (1 cross-edges)
 - **src/jobs +1 dirs · publishCompletion** (1 cross-edges)
 
 ## How to Explore
 
 ```
-get_communities with id: "community-92"
+get_communities with id: "community-124"
 smart_context with task: "understand src/jobs +1 dirs · processNextQueued", format: "gcx"
 find_usages with id: "apps/backtester/src/jobs/worker.ts::processNextQueued", format: "gcx"
 ```

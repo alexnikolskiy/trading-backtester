@@ -24,13 +24,13 @@ Use this skill when working on files in:
 | File | Symbols |
 |------|---------|
 | `apps/backtester/src/engine/artifacts.ts` | RunOutcome |
-| `apps/backtester/src/engine/dataset.ts` | CandleDataset, bars, fixturesDir, loadCandleDataset, symbol, ... |
+| `apps/backtester/src/engine/dataset.ts` | datasetRef, frozen, bars, file, fixturesDir, ... |
 | `apps/backtester/src/engine/module-executor.ts` | closeAll |
 | `apps/backtester/src/engine/overlay.ts` | registry |
-| `apps/backtester/src/engine/registry.ts` | resolveExecutionProfile, ref, resolveStrategy, ref, ref, ... |
-| `apps/backtester/src/engine/run-overlay.ts` | request, _engine, deps, OverlayRunDeps, engineRequest, ... |
-| `apps/backtester/src/engine/runner.ts` | i, entry, rejected, fillKind, ro, ... |
-| `packages/research-contracts/src/research/catalogs.ts` | knownStrategyRefs, platformContractContext |
+| `apps/backtester/src/engine/registry.ts` | resolveExecutionProfile, resolveStrategy, ref, ref, ref, ... |
+| `apps/backtester/src/engine/run-overlay.ts` | runOverlayBacktest, deps, engineRequest, _engine, OverlayRunDeps, ... |
+| `apps/backtester/src/engine/runner.ts` | baseline, riskProfile, reqValidation, message, router, ... |
+| `packages/research-contracts/src/research/catalogs.ts` | platformContractContext, knownStrategyRefs |
 
 ## Entry Points
 
@@ -39,15 +39,15 @@ Use this skill when working on files in:
 ## Connected Communities
 
 - **src/engine +1 dirs · simulateTarget** (3 cross-edges)
-- **backtester · main** (1 cross-edges)
+- **src/engine · declaredMarketKinds** (1 cross-edges)
+- **backtester/test +3 dirs** (1 cross-edges)
 - **src/engine · computeComparison** (1 cross-edges)
 - **src/engine · findRepoRoot** (1 cross-edges)
-- **src/engine · declaredMarketKinds** (1 cross-edges)
 
 ## How to Explore
 
 ```
-get_communities with id: "community-71"
+get_communities with id: "community-80"
 smart_context with task: "understand src/engine +1 dirs · runBacktest", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/runner.ts::runBacktest", format: "gcx"
 ```

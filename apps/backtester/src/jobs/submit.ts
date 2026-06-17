@@ -75,6 +75,14 @@ function validate(req: RunSubmitRequest): void {
     if (issues.length > 0) {
       throw new SubmitError(400, 'validation_error', `invalid module bundle: ${issues.map((i) => i.code).join(', ')}`);
     }
+    const expectedKind = req.engine === 'overlay' ? 'overlay' : 'strategy';
+    if (req.moduleBundle.manifest.kind !== expectedKind) {
+      throw new SubmitError(
+        400,
+        'validation_error',
+        `module bundle kind must be ${expectedKind} for engine ${req.engine ?? 'momentum'}`,
+      );
+    }
   }
 }
 

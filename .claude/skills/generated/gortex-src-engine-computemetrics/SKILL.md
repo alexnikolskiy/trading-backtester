@@ -17,13 +17,13 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/artifacts.ts` | EquityPoint, Trade |
-| `apps/backtester/src/engine/metrics.ts` | equity, t, absGrossLoss, point, requested, ... |
+| `apps/backtester/src/engine/artifacts.ts` | Trade, EquityPoint |
+| `apps/backtester/src/engine/metrics.ts` | t, trades, t, std, topTradeContributionPct, ... |
 
 ## How to Explore
 
 ```
-get_communities with id: "community-63"
+get_communities with id: "community-72"
 smart_context with task: "understand src/engine · computeMetrics", format: "gcx"
 ```
 

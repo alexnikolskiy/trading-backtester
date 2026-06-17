@@ -18,8 +18,8 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/market-tape.ts` | snapshots, key, frozenBars, indexByMinute, asRecord, ... |
-| `apps/backtester/src/engine/risk.ts` | AddPositionContext, currentPct, allowedPct, requestedPct, limits, ... |
+| `apps/backtester/src/engine/market-tape.ts` | source, s, timeframe, T, snapshots, ... |
+| `apps/backtester/src/engine/risk.ts` | limits, allowedPct, posCtx, AddPositionContext, barIndex, ... |
 | `packages/research-contracts/src/research/decision.ts` | AddToPositionDecision |
 
 ## Entry Points
@@ -33,7 +33,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-69"
+get_communities with id: "community-78"
 smart_context with task: "understand src/engine +1 dirs · buildMarketTape", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/market-tape.ts::buildMarketTape", format: "gcx"
 ```

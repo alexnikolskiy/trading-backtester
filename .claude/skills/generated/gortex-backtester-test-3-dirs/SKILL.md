@@ -1,20 +1,23 @@
 ---
 name: gortex-backtester-test-3-dirs
-description: "Work in the backtester/test +3 dirs area — 44 symbols across 8 files (85% cohesion)"
+description: "Work in the backtester/test +3 dirs area — 55 symbols across 11 files (85% cohesion)"
 ---
 
 # backtester/test +3 dirs
 
-44 symbols | 8 files | 85% cohesion
+55 symbols | 11 files | 85% cohesion
 
 ## When to Use
 
 Use this skill when working on files in:
 - `apps/backtester/src/engine/data-adapter.ts`
 - `apps/backtester/src/engine/market-tape.ts`
+- `apps/backtester/src/engine/module-executor.ts`
 - `apps/backtester/test/overlay-engine.test.ts`
 - `apps/backtester/test/overlay-golden.test.ts`
 - `apps/backtester/test/overlay-router.test.ts`
+- `apps/backtester/test/overlay-sandbox-equivalence.test.ts`
+- `apps/backtester/test/overlay-sandbox-session.test.ts`
 - `packages/research-contracts/src/research/canonical-row.ts`
 - `packages/research-contracts/src/research/market-tape.ts`
 - `packages/research-contracts/src/run.ts`
@@ -23,11 +26,14 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/data-adapter.ts` | buildOverlayDataset, tsTo, r, result, batch, ... |
-| `apps/backtester/src/engine/market-tape.ts` | symbols, source, rows, anyTaker, detail, ... |
-| `apps/backtester/test/overlay-engine.test.ts` | loadRequest, registry, name, overlayDeps, req, ... |
-| `apps/backtester/test/overlay-golden.test.ts` | name, loadRequest, overlayDeps, registry, marketTape, ... |
-| `apps/backtester/test/overlay-router.test.ts` | req, selFrom |
+| `apps/backtester/src/engine/data-adapter.ts` | sel, port, toCanonicalRowV2, tsFrom, result, ... |
+| `apps/backtester/src/engine/market-tape.ts` | anyTaker, symbols, r, bucket, source, ... |
+| `apps/backtester/src/engine/module-executor.ts` | exec, executor, createTrustedRouter, ExecutorRouter, close |
+| `apps/backtester/test/overlay-engine.test.ts` | overlayDeps, req, registry, loadRequest, name, ... |
+| `apps/backtester/test/overlay-golden.test.ts` | loadRequest, name, registry, req, marketTape, ... |
+| `apps/backtester/test/overlay-router.test.ts` | selFrom, req |
+| `apps/backtester/test/overlay-sandbox-equivalence.test.ts` | req, loadRequest, selFrom, name |
+| `apps/backtester/test/overlay-sandbox-session.test.ts` | name, loadRequest |
 | `packages/research-contracts/src/research/canonical-row.ts` | CanonicalRowV2 |
 | `packages/research-contracts/src/research/market-tape.ts` | TapeBuildResult |
 | `packages/research-contracts/src/run.ts` | BacktestRunRequest |
@@ -43,7 +49,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-18"
+get_communities with id: "community-29"
 smart_context with task: "understand backtester/test +3 dirs", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/data-adapter.ts::buildOverlayDataset", format: "gcx"
 ```

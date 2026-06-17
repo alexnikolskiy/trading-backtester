@@ -91,7 +91,14 @@ export async function buildApp(config: AppConfig, overrides: BuildAppOptions = {
   };
 
   const completionDeps: CompletionDeps = { store, clock, uid, postWebhook };
-  const workerDeps: WorkerDeps = { ...completionDeps, dataPort, artifactStore, bundleStore, sandbox };
+  const workerDeps: WorkerDeps = {
+    ...completionDeps,
+    dataPort,
+    artifactStore,
+    bundleStore,
+    sandbox,
+    overlaySandbox: config.overlaySandbox,
+  };
 
   const drain = (): Promise<number> => drainQueue(workerDeps);
   const reap = (): Promise<unknown> => reapAndPublish(completionDeps);

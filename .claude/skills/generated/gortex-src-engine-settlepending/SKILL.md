@@ -18,9 +18,9 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/execution.ts` | sizingPct, size, fee, size, side, ... |
-| `apps/backtester/src/engine/portfolio.ts` | OpenFill, newEntry, fill, order, _mode, ... |
-| `apps/backtester/src/engine/runner.ts` | isPartial, runProtectionCheck, barIndex, acc, pending, ... |
+| `apps/backtester/src/engine/execution.ts` | isBuy, notional, cash, feeBps, isBuy, ... |
+| `apps/backtester/src/engine/portfolio.ts` | newSize, fill, _mode, order, fill, ... |
+| `apps/backtester/src/engine/runner.ts` | calc, id, trade, acc, portfolio, ... |
 
 ## Connected Communities
 
@@ -30,7 +30,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-74"
+get_communities with id: "community-83"
 smart_context with task: "understand src/engine · settlePending", format: "gcx"
 ```
 

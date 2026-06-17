@@ -15,20 +15,33 @@ import { CONTRACT_VERSION } from '@trading/research-contracts';
 import { contentRef } from '../determinism/hash';
 import { persistRunArtifacts, type ArtifactStore } from '../artifacts/store';
 import { persistOverlayArtifacts } from '../artifacts/overlay-store';
+import { DEFAULT_EXEC, DEFAULT_RISK } from '../engine/profiles';
+import { earlyExitShortAfterPump } from '../engine/examples/early-exit-short-after-pump.overlay';
+import { shortAfterPump } from '../engine/examples/short-after-pump.strategy';
 import { datasetFingerprint, materialize, type BacktesterDataPort } from '../data/reader';
 import { buildOverlayDataset } from '../engine/data-adapter';
 import { runOverlayBacktest } from '../engine/run-overlay';
 import { buildTrustedRegistry } from '../engine/trusted-registry';
+import { loadBundle, type ModuleBundle as SandboxModuleBundle } from '../engine/sandbox/bundle';
+import { materializeBundle } from '../engine/sandbox/bundle-materialize';
+import { createExecutorRouter, createModuleRegistry, type ExecutorRouter } from '../engine/sandbox/routing';
+import { createSandboxPolicyRegistry } from '../engine/sandbox-policy';
 import { toOverlaySummary } from './overlay-summary';
 import { RunnerError } from '../runner/errors';
 import { TrustedMomentumExecutor, type ModuleExecutor } from '../runner/module-executor';
 import { runBacktest } from '../runner/run-backtest';
 import { SandboxModuleExecutor, type SandboxConfig } from '../sandbox/sandbox-executor';
 import type { BundleStore } from '../sandbox/bundle-store';
+import type { OverlaySandboxSettings } from '../config';
 import { publishCompletion, type CompletionDeps } from './completion';
 import type { JobRow, JobStore } from './job-store';
 
 export { RunnerError };
+
+interface SandboxBundleHandle {
+  readonly bundle: SandboxModuleBundle;
+  readonly cleanup: () => Promise<void>;
+}
 
 export interface WorkerDeps extends CompletionDeps {
   store: JobStore;
@@ -36,6 +49,7 @@ export interface WorkerDeps extends CompletionDeps {
   artifactStore: ArtifactStore;
   bundleStore?: BundleStore;
   sandbox?: SandboxConfig;
+  overlaySandbox: OverlaySandboxSettings;
 }
 
 function periodMs(period: RunPeriod): { tsFrom: number; tsTo: number } {
@@ -47,7 +61,20 @@ function periodMs(period: RunPeriod): { tsFrom: number; tsTo: number } {
   };
 }
 
-async function executorFor(deps: WorkerDeps, job: JobRow): Promise<ModuleExecutor> {
+async function sandboxBundleFor(deps: WorkerDeps, hash: ContentHash): Promise<SandboxBundleHandle> {
+  if (!deps.bundleStore) {
+    throw new RunnerError('sandbox_unavailable', 'sandbox execution is not configured');
+  }
+  const bundle = await deps.bundleStore.get(hash);
+  if (!bundle) throw new RunnerError('missing_module', `unknown bundle: ${hash}`);
+  const materialized = await materializeBundle(bundle);
+  return { bundle: loadBundle(materialized.bundleDir), cleanup: materialized.cleanup };
+}
+
+async function executorFor(
+  deps: WorkerDeps,
+  job: JobRow,
+): Promise<ModuleExecutor> {
   if (!job.bundleHash) return new TrustedMomentumExecutor();
   if (!deps.bundleStore || !deps.sandbox) {
     throw new RunnerError('sandbox_unavailable', 'sandbox execution is not configured');
@@ -57,6 +84,15 @@ async function executorFor(deps: WorkerDeps, job: JobRow): Promise<ModuleExecuto
   return new SandboxModuleExecutor(bundle, deps.sandbox);
 }
 
+function overlayRouterFor(deps: WorkerDeps): ExecutorRouter {
+  const policy = deps.overlaySandbox.policy;
+  return createExecutorRouter({
+    sandboxPolicies: createSandboxPolicyRegistry([policy]),
+    sandboxPolicyRef: { id: policy.id, version: policy.version },
+    sandboxDeps: { harnessDir: deps.overlaySandbox.harnessDir },
+  });
+}
+
 /** Claim and run one queued job. Returns the (now terminal) row, or undefined if the queue was empty. */
 export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | undefined> {
   const claimed = await deps.store.claimNextQueued(deps.clock());
@@ -64,11 +100,17 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
   const runId = claimed.runId;
 
   let executor: ModuleExecutor | undefined;
+  let sandboxRouter: ExecutorRouter | undefined;
+  let sandboxBundle: SandboxBundleHandle | undefined;
   try {
     let summary: RunResultSummary;
     let resultHash: ContentHash;
     let manifest: ArtifactManifest;
     let dsFingerprint: string;
+
+    if (claimed.bundleHash !== undefined) {
+      sandboxBundle = await sandboxBundleFor(deps, claimed.bundleHash);
+    }
 
     if (claimed.request.engine === 'overlay') {
       // ===== OVERLAY PATH — lifted engine end-to-end (Slice 6a) =====
@@ -101,9 +143,22 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
         ...(r.robustnessChecks !== undefined ? { robustnessChecks: r.robustnessChecks } : {}),
       };
 
+      let registry = buildTrustedRegistry();
+      if (claimed.bundleHash !== undefined) {
+        registry = createModuleRegistry({
+          strategies: [shortAfterPump],
+          overlays: [earlyExitShortAfterPump],
+          overlayBundles: [sandboxBundle!.bundle],
+          riskProfiles: [DEFAULT_RISK],
+          executionProfiles: [DEFAULT_EXEC],
+        });
+        sandboxRouter = overlayRouterFor(deps);
+      }
+
       const outcome = runOverlayBacktest(engineRequest, {
-        registry: buildTrustedRegistry(),
+        registry,
         marketTape,
+        ...(sandboxRouter ? { router: sandboxRouter } : {}),
       });
       if (outcome.status !== 'completed') {
         throw new RunnerError(
@@ -118,7 +173,14 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
         dsFingerprint,
       );
       manifest = persisted.manifest;
-      summary = toOverlaySummary(outcome, runId, persisted.artifactRefs, resultHash, dsFingerprint);
+      summary = toOverlaySummary(
+        outcome,
+        runId,
+        persisted.artifactRefs,
+        resultHash,
+        dsFingerprint,
+        claimed.bundleHash,
+      );
     } else {
       // ===== MOMENTUM PATH — unchanged (golden eff10116… must not move) =====
       executor = await executorFor(deps, claimed);
@@ -196,6 +258,8 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
     });
   } finally {
     await executor?.close?.();
+    sandboxRouter?.closeAll();
+    await sandboxBundle?.cleanup();
   }
 
   const finished = await deps.store.get(runId);

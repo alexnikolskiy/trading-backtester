@@ -17,13 +17,13 @@ Use this skill when working on files in:
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/market-tape.ts` | computeGaps, minuteTs, SymbolColumns, covered, symbol, ... |
-| `packages/research-contracts/src/research/market-tape.ts` | MarketDataCoverageState, MarketDataKind, MarketDataGap, KindCoverage |
+| `apps/backtester/src/engine/market-tape.ts` | kind, ts, base, set, covered, ... |
+| `packages/research-contracts/src/research/market-tape.ts` | MarketDataCoverageState, MarketDataGap, MarketDataKind, KindCoverage |
 
 ## How to Explore
 
 ```
-get_communities with id: "community-61"
+get_communities with id: "community-70"
 smart_context with task: "understand src/engine +1 dirs · kindCoverage", format: "gcx"
 ```
 

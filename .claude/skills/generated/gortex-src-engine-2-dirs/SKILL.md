@@ -1,11 +1,11 @@
 ---
 name: gortex-src-engine-2-dirs
-description: "Work in the src/engine +2 dirs area — 159 symbols across 10 files (90% cohesion)"
+description: "Work in the src/engine +2 dirs area — 155 symbols across 9 files (89% cohesion)"
 ---
 
 # src/engine +2 dirs
 
-159 symbols | 10 files | 90% cohesion
+155 symbols | 9 files | 89% cohesion
 
 ## When to Use
 
@@ -19,22 +19,20 @@ Use this skill when working on files in:
 - `apps/backtester/src/engine/runner.ts`
 - `packages/research-contracts/src/research/context.ts`
 - `packages/research-contracts/src/research/decision.ts`
-- `packages/research-contracts/src/research/module.ts`
 
 ## Key Files
 
 | File | Symbols |
 |------|---------|
-| `apps/backtester/src/engine/context.ts` | build, obj, barIndex, propKey, T, ... |
-| `apps/backtester/src/engine/dataset.ts` | barIndex, indicatorApiFor, engine |
-| `apps/backtester/src/engine/indicators/engine.ts` | barIndex, accessorAt |
-| `apps/backtester/src/engine/module-executor.ts` | forOverlay, module, forStrategy, ctx, InProcessTrustedModuleExecutor, ... |
-| `apps/backtester/src/engine/overlay.ts` | branch, overlayRef, overlay, overlays, OverlayComposer, ... |
-| `apps/backtester/src/engine/portfolio.ts` | equityAt, _position, exitPrice, constructor, exitPrice, ... |
-| `apps/backtester/src/engine/runner.ts` | barIndex, order, intent, expired, riskDecision, ... |
-| `packages/research-contracts/src/research/context.ts` | IndicatorApi, StrategyContext |
-| `packages/research-contracts/src/research/decision.ts` | OverlayDecision, StrategyDecision |
-| `packages/research-contracts/src/research/module.ts` | HypothesisOverlayModule, StrategyModule |
+| `apps/backtester/src/engine/context.ts` | deepFreeze, obj, carriesMarket, ctx, state, ... |
+| `apps/backtester/src/engine/dataset.ts` | engine, indicatorApiFor, barIndex |
+| `apps/backtester/src/engine/indicators/engine.ts` | accessorAt, barIndex |
+| `apps/backtester/src/engine/module-executor.ts` | executeStrategyHook, normalizeOverlay, forOverlay, ctx, disposeStrategy, ... |
+| `apps/backtester/src/engine/overlay.ts` | effects, errs, OverlayDecisionSource, compose, OverlayComposer, ... |
+| `apps/backtester/src/engine/portfolio.ts` | grossUnrealized, expirePending, OpenPosition, pos, initialEquity, ... |
+| `apps/backtester/src/engine/runner.ts` | t, outcome, portfolio, last, outcome, ... |
+| `packages/research-contracts/src/research/context.ts` | IndicatorApi |
+| `packages/research-contracts/src/research/decision.ts` | StrategyDecision, OverlayDecision |
 
 ## Entry Points
 
@@ -52,7 +50,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-72"
+get_communities with id: "community-81"
 smart_context with task: "understand src/engine +2 dirs", format: "gcx"
 find_usages with id: "apps/backtester/src/engine/runner.ts::runSymbol", format: "gcx"
 ```

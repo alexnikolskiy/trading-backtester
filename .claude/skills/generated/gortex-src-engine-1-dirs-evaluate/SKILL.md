@@ -19,7 +19,7 @@ Use this skill when working on files in:
 | File | Symbols |
 |------|---------|
 | `apps/backtester/src/engine/artifacts.ts` | RiskClamp |
-| `apps/backtester/src/engine/risk.ts` | to, clamps, stop, clampHints, openPositions, ... |
+| `apps/backtester/src/engine/risk.ts` | bounds, take, normHint, evaluate, RiskEngine, ... |
 | `packages/research-contracts/src/research/risk-execution.ts` | RiskProfile, Bounds |
 
 ## Connected Communities
@@ -29,7 +29,7 @@ Use this skill when working on files in:
 ## How to Explore
 
 ```
-get_communities with id: "community-68"
+get_communities with id: "community-77"
 smart_context with task: "understand src/engine +1 dirs · evaluate", format: "gcx"
 ```
 
