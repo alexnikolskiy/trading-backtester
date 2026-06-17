@@ -413,6 +413,11 @@ The thinnest end-to-end that proves the architecture:
 - **Slice 4:** Network Research Historical Data API on platform/mock; switch `platformDataClient` to
   HTTP; mock-platform parity.
 - **Slice 5:** trading-lab cutover behind the flag; retire sp4_mock; publish `@trading-backtester/client`.
+- **Slice 6a (landed):** trusted lift of the full platform overlay engine into `apps/backtester/src/engine/**`
+  — baseline + overlay-variant execution and a real `ComparisonSummary`, flag-gated behind
+  `BACKTESTER_ENABLE_OVERLAY_ENGINE` and selected by the `engine:'momentum'|'overlay'` request discriminator,
+  with the platform `verify_018` HTTP `result_hash` parity gate as the cutover prerequisite. Untrusted
+  sandboxed overlay-module execution (Slice 6b) and retiring `sp4_mock` remain pending.
 
 ---
 
