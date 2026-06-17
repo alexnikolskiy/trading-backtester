@@ -57,4 +57,24 @@ describe('overlay pre-queue gating (engine off)', () => {
     expect(res.json().code).toBe('validation_error');
     expect(res.json().message).toMatch(/overlay engine is disabled/i);
   });
+
+  it('POST /v1/runs with a missing body returns 400 validation_error (not 500)', async () => {
+    app = await buildTestApp();
+    // No payload → req.body undefined. Pre-fix this hit the overlay gate's `body.engine` deref → TypeError → 500.
+    const res = await app.server.inject({ method: 'POST', url: '/v1/runs', headers: { ...AUTH } });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code ?? res.json().category).toBe('validation_error');
+  });
+
+  it('POST /v1/runs with a non-object JSON body returns 400 validation_error (not 500)', async () => {
+    app = await buildTestApp();
+    const res = await app.server.inject({
+      method: 'POST',
+      url: '/v1/runs',
+      headers: { ...AUTH, 'content-type': 'application/json' },
+      payload: 'null',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().code ?? res.json().category).toBe('validation_error');
+  });
 });

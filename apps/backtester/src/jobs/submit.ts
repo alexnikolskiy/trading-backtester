@@ -98,7 +98,9 @@ export async function submitRun(deps: SubmitDeps, body: RunSubmitRequest): Promi
   // Gate the overlay engine BEFORE validate(): a disabled overlay request must surface the
   // engine-disabled message, not an incidental validation error (e.g. an overlay-only metric that
   // the momentum catalog would reject as unknown_metric).
-  if (body.engine === 'overlay' && !deps.enableOverlayEngine) {
+  // Guard the dereference: a null / undefined / non-object body must NOT crash here (TypeError → 500);
+  // it falls through to validate(), which returns a clean 400 'request body must be an object'.
+  if (body != null && typeof body === 'object' && body.engine === 'overlay' && !deps.enableOverlayEngine) {
     throw new SubmitError(400, 'validation_error', 'overlay engine is disabled');
   }
 
