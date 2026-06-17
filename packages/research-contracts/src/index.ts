@@ -1,4 +1,5 @@
 export * from './run.js';
+export * from './comparison.js';
 export * from './historical.js';
 
 /** 017 run/module contract version. Must stay in lockstep with trading-platform for byte parity. */

@@ -4,6 +4,8 @@
 // trading-lab `backtesterClient` consumes. Kept as pure types (no runtime deps) so this package is
 // the single versioned parity anchor.
 
+import type { ComparisonSummary } from './comparison.js';
+
 export type RunMode = 'research' | 'review' | 'promotion';
 
 export interface Ref {
@@ -141,6 +143,8 @@ export interface RunResultSummary {
   readonly evidence: RunEvidence;
   /** sha256 of canonicalJson(result) — the verifiable determinism/parity primitive. */
   readonly resultHash?: ContentHash;
+  /** Real baseline-vs-variant comparison (overlay-engine runs only; omitted for single-run/momentum summaries). */
+  readonly comparison?: ComparisonSummary;
 }
 
 export interface RunTimelineEntry {
