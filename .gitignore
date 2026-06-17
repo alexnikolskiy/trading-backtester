@@ -3,6 +3,11 @@ dist/
 # The client package ships a prebuilt, self-contained dist so it installs from git/path with no
 # workspace resolution (rebuild with `pnpm --filter @trading-backtester/client build`).
 !/packages/client/dist/
+# Slice 6b-A — overlay sandbox harness `_engine` is generated from src/engine/indicators/** by
+# `build:sandbox-harness-overlay` (run in pretest + vitest globalSetup). Source of truth is the .ts;
+# the drift-guard test asserts the committed manifest hash matches the source.
+/apps/backtester/sandbox-harness-overlay/_engine/
+
 .data/
 coverage/
 *.log

@@ -1,4 +1,5 @@
 import { runBacktest } from './runner.js';
+import type { ExecutorRouter } from './module-executor.js';
 import type { TrustedModuleRegistry } from './registry.js';
 import type { MarketTapeDataset } from '@trading/research-contracts/research';
 import type { BacktestRunRequest } from '@trading/research-contracts';
@@ -7,6 +8,7 @@ import type { RunOutcome } from './artifacts.js';
 export interface OverlayRunDeps {
   readonly registry: TrustedModuleRegistry;
   readonly marketTape?: MarketTapeDataset;
+  readonly router?: ExecutorRouter;
 }
 
 /**
@@ -16,5 +18,9 @@ export interface OverlayRunDeps {
  */
 export function runOverlayBacktest(request: BacktestRunRequest, deps: OverlayRunDeps): RunOutcome {
   const { engine: _engine, ...engineRequest } = request;
-  return runBacktest(engineRequest, { registry: deps.registry, marketTape: deps.marketTape });
+  return runBacktest(engineRequest, {
+    registry: deps.registry,
+    marketTape: deps.marketTape,
+    ...(deps.router ? { router: deps.router } : {}),
+  });
 }

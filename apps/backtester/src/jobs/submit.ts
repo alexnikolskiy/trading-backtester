@@ -75,6 +75,14 @@ function validate(req: RunSubmitRequest): void {
     if (issues.length > 0) {
       throw new SubmitError(400, 'validation_error', `invalid module bundle: ${issues.map((i) => i.code).join(', ')}`);
     }
+    const expectedKind = req.engine === 'overlay' ? 'overlay' : 'strategy';
+    if (req.moduleBundle.manifest.kind !== expectedKind) {
+      throw new SubmitError(
+        400,
+        'validation_error',
+        `module bundle kind must be ${expectedKind} for engine ${req.engine ?? 'momentum'}`,
+      );
+    }
   }
 }
 
@@ -95,11 +103,16 @@ export interface SubmitOutcome {
 }
 
 export async function submitRun(deps: SubmitDeps, body: RunSubmitRequest): Promise<SubmitOutcome> {
-  validate(body);
-
-  if (body.engine === 'overlay' && !deps.enableOverlayEngine) {
+  // Gate the overlay engine BEFORE validate(): a disabled overlay request must surface the
+  // engine-disabled message, not an incidental validation error (e.g. an overlay-only metric that
+  // the momentum catalog would reject as unknown_metric).
+  // Guard the dereference: a null / undefined / non-object body must NOT crash here (TypeError → 500);
+  // it falls through to validate(), which returns a clean 400 'request body must be an object'.
+  if (body != null && typeof body === 'object' && body.engine === 'overlay' && !deps.enableOverlayEngine) {
     throw new SubmitError(400, 'validation_error', 'overlay engine is disabled');
   }
+
+  validate(body);
 
   const runId = body.runId ?? deps.uid();
   const fingerprint = requestFingerprint(body);

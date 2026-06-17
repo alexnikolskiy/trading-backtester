@@ -16,6 +16,7 @@ export function toOverlaySummary(
   artifactRefs: readonly ArtifactReference[],
   resultHash: ContentHash,
   datasetFingerprint: string,
+  bundleHash?: ContentHash,
 ): RunResultSummary {
   const headline = outcome.variant ?? outcome.baseline;
   const evidence: RunEvidence = {
@@ -24,6 +25,7 @@ export function toOverlaySummary(
     moduleVersions: headline.evidence.moduleVersions,
     datasetRef: headline.evidence.datasetRef,
     datasetFingerprint,
+    ...(bundleHash !== undefined ? { bundleHash } : {}),
   };
   return {
     runId,

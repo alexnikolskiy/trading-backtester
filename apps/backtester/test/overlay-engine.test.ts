@@ -6,6 +6,7 @@ import { createSchemaRegistry } from '../src/engine/validation/schema-registry.j
 import { SCHEMA_IDS } from '@trading/research-contracts/research';
 import type {
   BacktestRunRequest,
+  ModuleBundle,
   RunResultSummary,
   RunStatusView,
 } from '@trading/research-contracts';
@@ -14,16 +15,28 @@ import { runOverlayBacktest } from '../src/engine/run-overlay.js';
 import { buildTrustedRegistry } from '../src/engine/trusted-registry.js';
 import { FixtureDataPort } from '../src/data/reader.js';
 import { AUTH, buildTestApp, FIXTURES_DIR } from './helpers.js';
+import { bundleHash } from '../src/sandbox/bundle.js';
+import { DOCKER_AVAILABLE } from './store-factories.js';
 
 const OVERLAY_REQUESTS_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   'fixtures/overlay/requests',
+);
+const OVERLAY_BUNDLES_DIR = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  'fixtures/overlay/bundles',
 );
 
 function loadRequest(name: string): BacktestRunRequest {
   return JSON.parse(
     readFileSync(resolve(OVERLAY_REQUESTS_DIR, name), 'utf8'),
   ) as BacktestRunRequest;
+}
+
+function loadInlineBundle(name: string) {
+  return JSON.parse(
+    readFileSync(resolve(OVERLAY_BUNDLES_DIR, name), 'utf8'),
+  ) as ModuleBundle;
 }
 
 async function overlayDeps(req: BacktestRunRequest) {
@@ -117,6 +130,19 @@ describe('runOverlayBacktest — trusted overlay run path (Slice 6a)', () => {
   });
 });
 
+describe('buildOverlayDataset — period guard (Slice 6b-a)', () => {
+  it('rejects an unparseable period with a RunnerError(validation_error)', async () => {
+    await expect(
+      buildOverlayDataset(new FixtureDataPort(FIXTURES_DIR), {
+        datasetRef: 'pump-fixture-1m',
+        symbols: ['BTCUSDT'],
+        timeframe: '1m',
+        period: { from: 'not-a-date', to: 'also-bad' },
+      }),
+    ).rejects.toMatchObject({ code: 'validation_error' });
+  });
+});
+
 describe('overlay engine — end-to-end through the worker (Slice 6a CP4)', () => {
   // Platform-derived golden (NEVER frozen from backtester output — the worker run must MATCH it).
   const GV = readFileSync(
@@ -170,4 +196,40 @@ describe('overlay engine — end-to-end through the worker (Slice 6a CP4)', () =
     expect(result.comparison).toBeUndefined();
     expect('comparison' in result).toBe(false);
   });
+});
+
+describe.skipIf(!DOCKER_AVAILABLE)('overlay worker — sandboxed overlay bundle path', () => {
+  it('accepts an overlay bundle, runs it in the sandbox, and preserves bundleHash evidence', async () => {
+    const app = await buildTestApp({ enableOverlayEngine: true });
+    try {
+      const variantReq = loadRequest('variant.json');
+      const bundle = loadInlineBundle('early-exit-short-after-pump.bundle.json');
+      const submit = await app.server.inject({
+        method: 'POST',
+        url: '/v1/runs',
+        headers: AUTH,
+        payload: {
+          ...variantReq,
+          engine: 'overlay',
+          moduleBundle: bundle,
+        },
+      });
+      expect(submit.statusCode).toBe(202);
+
+      expect(await app.drain()).toBe(1);
+
+      const result = (
+        await app.server.inject({ url: `/v1/runs/${variantReq.runId}/result`, headers: AUTH })
+      ).json() as RunResultSummary;
+      expect(result.status).toBe('completed');
+      expect(result.evidence.bundleHash).toBe(bundleHash(bundle));
+      expect(result.comparison).toBeDefined();
+      expect(
+        Object.values(result.comparison!.variants[0].metricDeltas).some((d) => d.delta !== 0),
+      ).toBe(true);
+      expect(result.metrics.total_bars).toBeGreaterThan(0);
+    } finally {
+      await app.dispose();
+    }
+  }, 60_000);
 });

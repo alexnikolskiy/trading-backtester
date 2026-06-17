@@ -416,8 +416,15 @@ The thinnest end-to-end that proves the architecture:
 - **Slice 6a (landed):** trusted lift of the full platform overlay engine into `apps/backtester/src/engine/**`
   — baseline + overlay-variant execution and a real `ComparisonSummary`, flag-gated behind
   `BACKTESTER_ENABLE_OVERLAY_ENGINE` and selected by the `engine:'momentum'|'overlay'` request discriminator,
-  with the platform `verify_018` HTTP `result_hash` parity gate as the cutover prerequisite. Untrusted
-  sandboxed overlay-module execution (Slice 6b) and retiring `sp4_mock` remain pending.
+  with the platform `verify_018` HTTP `result_hash` parity gate as the cutover prerequisite.
+- **Slice 6b-A (landed in this repo):** untrusted overlay-module execution is lifted into the backtester as the
+  per-bar-IPC `SandboxModuleExecutor` path, with Docker-gated harness/session parity checks and the corrected
+  equivalence posture: sandboxed strategy parity is byte-identical to trusted + frozen baseline golden, while
+  sandboxed overlay parity is deterministic + structurally verified rather than byte-equal to the trusted
+  overlay due to lazy overlay-session warmup semantics.
+- **Slice 6b-B / 6b-C (pending):** trading-lab still needs to cut over from `baselineOnlyComparison` to the real
+  `comparison` response and submit untrusted overlay bundles through the backtester, after which the legacy
+  `sp4_mock` path can be retired.
 
 ---
 

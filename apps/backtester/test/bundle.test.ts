@@ -37,8 +37,16 @@ describe('bundle validation', () => {
     expect(issues.some((i) => i.code === 'bundle_entrypoint_invalid')).toBe(true);
   });
 
-  it('rejects a non-strategy kind', () => {
-    const issues = validateBundle(bundle({ manifest: { ...bundle().manifest, kind: 'overlay' as never } }));
+  it('accepts an overlay kind', () => {
+    expect(
+      validateBundle(bundle({ manifest: { ...bundle().manifest, kind: 'overlay' as never } })),
+    ).toEqual([]);
+  });
+
+  it('rejects an unsupported kind', () => {
+    const issues = validateBundle(
+      bundle({ manifest: { ...bundle().manifest, kind: 'other' as never } }),
+    );
     expect(issues.some((i) => i.code === 'unsupported_module_kind')).toBe(true);
   });
 
