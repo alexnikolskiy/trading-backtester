@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { buildApp, type AppHandles, type BuildAppOptions } from '../src/app';
 import { InMemoryArtifactStore } from '../src/artifacts/store';
 import type { AppConfig } from '../src/config';
+import { DEFAULT_SANDBOX, SANDBOX_IMAGE } from '../src/engine/sandbox-policy';
 import type { JobStore } from '../src/jobs/job-store';
 import type { RunSubmitRequest } from '@trading/research-contracts';
 import type { StoreFactory } from './store-factories';
@@ -38,6 +39,15 @@ export function testConfig(over: Partial<AppConfig> = {}): AppConfig {
       wallTimeMs: 5_000,
       tmpfsMb: 64,
       user: '65534:65534',
+    },
+    overlaySandbox: {
+      harnessDir: resolve(HERE, '../sandbox-harness-overlay'),
+      image: SANDBOX_IMAGE,
+      policy: {
+        ...DEFAULT_SANDBOX,
+        isolation: { ...DEFAULT_SANDBOX.isolation, image: SANDBOX_IMAGE },
+        limits: { ...DEFAULT_SANDBOX.limits },
+      },
     },
     ...over,
   };
