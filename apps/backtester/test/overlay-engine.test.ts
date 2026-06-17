@@ -78,6 +78,20 @@ describe('runOverlayBacktest — trusted overlay run path (Slice 6a)', () => {
     }
   });
 
+  it('zero-overlays edge case: variant === null, comparison === null, headline = baseline (≥1 trade)', async () => {
+    // Impl-note 1: a no-overlay request yields a completed RunOutcome whose variant and
+    // comparison are explicitly null (not undefined), and whose headline result is the baseline.
+    const req = loadRequest('baseline.json');
+    expect(req.overlayRefs ?? []).toHaveLength(0);
+    const out = runOverlayBacktest(req, await overlayDeps(req));
+    expect(out.status).toBe('completed');
+    if (out.status === 'completed') {
+      expect(out.variant).toBeNull();
+      expect(out.comparison).toBeNull();
+      expect(out.baseline.trades.length).toBeGreaterThanOrEqual(1);
+    }
+  });
+
   it('runs overlay-variant: completed with baseline + variant + comparison; overlay early-exit', async () => {
     const req = loadRequest('variant.json');
     const out = runOverlayBacktest(req, await overlayDeps(req));
