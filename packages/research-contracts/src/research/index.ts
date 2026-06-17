@@ -7,3 +7,5 @@ export * from './indicators.js';
 export * from './market-tape.js';
 export * from './validation-codes.js';
 export * from './schema-assets.js';
+export * from './risk-execution.js';
+export * from './canonical-row.js';
