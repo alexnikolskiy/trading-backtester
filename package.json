@@ -9,6 +9,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "build:sandbox-harness-overlay": "node apps/backtester/scripts/build-sandbox-harness-overlay.mjs",
+    "pretest": "pnpm run build:sandbox-harness-overlay",
     "test": "vitest run",
     "test:watch": "vitest",
     "dev": "tsx watch apps/backtester/src/index.ts",
