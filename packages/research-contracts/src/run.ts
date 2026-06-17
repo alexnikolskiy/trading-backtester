@@ -4,6 +4,8 @@
 // trading-lab `backtesterClient` consumes. Kept as pure types (no runtime deps) so this package is
 // the single versioned parity anchor.
 
+import type { ComparisonSummary } from './comparison.js';
+
 export type RunMode = 'research' | 'review' | 'promotion';
 
 export interface Ref {
@@ -17,6 +19,8 @@ export interface RunPeriod {
 }
 
 export type ModuleKind = 'strategy';
+
+export type BacktestEngine = 'momentum' | 'overlay';
 
 /** Manifest of a submitted module. Identity is `id@version`; the registry key is the content hash. */
 export interface ModuleManifest {
@@ -49,6 +53,13 @@ export interface BacktestRunRequest {
   readonly params?: Record<string, unknown>;
   readonly seed: number;
   readonly metrics: readonly string[];
+  readonly overlayRefs?: readonly Ref[];
+  readonly riskProfileRef?: Ref;
+  readonly executionProfileRef?: Ref;
+  readonly parameterGrid?: object;
+  readonly robustnessChecks?: readonly string[];
+  readonly artifacts?: readonly string[];
+  readonly engine?: BacktestEngine;
 }
 
 /** Gateway submit DTO: the run request plus orchestration fields (not part of the fingerprint). */
@@ -132,6 +143,8 @@ export interface RunResultSummary {
   readonly evidence: RunEvidence;
   /** sha256 of canonicalJson(result) — the verifiable determinism/parity primitive. */
   readonly resultHash?: ContentHash;
+  /** Real baseline-vs-variant comparison (overlay-engine runs only; omitted for single-run/momentum summaries). */
+  readonly comparison?: ComparisonSummary;
 }
 
 export interface RunTimelineEntry {

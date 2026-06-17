@@ -111,6 +111,35 @@ export interface RunEvidence {
   readonly bundleHash?: ContentHash;
 }
 
+// Vendored copy of the comparison wire vocabulary (mirrors @trading/research-contracts
+// comparison.ts). Structurally identical so the optional RunResultSummary.comparison field stays
+// assignable across the parity guard.
+export interface MetricDelta {
+  readonly baseline: number;
+  readonly variant: number;
+  readonly delta: number;
+}
+
+export interface OverlayEffectsSummary {
+  readonly pass: number;
+  readonly annotate: number;
+  readonly patch: number;
+  readonly veto: number;
+}
+
+export interface ComparisonVariant {
+  readonly runId: string;
+  readonly overlayRefs: readonly Ref[];
+  readonly metricDeltas: Readonly<Record<string, MetricDelta>>;
+  readonly tradeOutcomeChanged: boolean;
+  readonly overlayEffectsSummary: OverlayEffectsSummary;
+}
+
+export interface ComparisonSummary {
+  readonly baselineRunId: string;
+  readonly variants: readonly ComparisonVariant[];
+}
+
 export interface RunResultSummary {
   readonly runId: string;
   readonly status: RunStatus;
@@ -118,6 +147,8 @@ export interface RunResultSummary {
   readonly artifactRefs: readonly ArtifactReference[];
   readonly evidence: RunEvidence;
   readonly resultHash?: ContentHash;
+  /** Real baseline-vs-variant comparison (overlay-engine runs only; omitted for single-run/momentum summaries). */
+  readonly comparison?: ComparisonSummary;
 }
 
 export interface RunTimelineEntry {

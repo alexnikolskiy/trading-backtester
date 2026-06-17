@@ -48,6 +48,27 @@ flag-gated; the `mock`/`mcp` paths and `sp4_mock` are unchanged. The backtester 
 bundles (not platform overlay modules); full overlay-module execution + retiring `sp4_mock` await
 lifting the platform runner (a later slice).
 
+**Slice 6a (trusted overlay-engine lift)** — the full platform research backtest engine (baseline +
+overlay-variant simulation, overlay composition at `onBarClose`/`onPositionBar`, a real
+`ComparisonSummary`) is lifted into `apps/backtester/src/engine/**` (a 15-file runner + indicator
+engine + ajv 017 validation), running through the **trusted in-process executor**
+(`createTrustedRegistry` over the lifted `short_after_pump` strategy + `early_exit_short_after_pump`
+overlay). It is a parallel, flag-gated path: a new request discriminator
+`engine: 'momentum' | 'overlay'` (default `momentum`) selects it in the worker, and availability is
+gated by `BACKTESTER_ENABLE_OVERLAY_ENGINE` (default **off**) — an `engine:'overlay'` submission while
+disabled is rejected pre-queue with `validation_error`. Overlay runs return a real
+baseline-vs-variant **`comparison`** block (additive/optional on `RunResultSummary`; momentum
+summaries omit it; the `@trading-backtester/client` wire vendors it behind the compile-time parity
+guard). Determinism is byte-for-byte identical to `trading-platform`'s `runBacktest`: the engine reuses
+the verbatim `src/determinism/{canonical-json,rng}`, and the lift's overlay `result_hash` is
+**platform-derived** and pinned (`baseline sha256:0be9931c…`, `variant sha256:e381659c…`). Parity is
+enforced by the platform's `scripts/verify_018_{baseline,overlay_variant,determinism}.mjs` run in
+`VERIFY_018_TARGET=http` mode against the live service — asserting the service `result_hash` equals the
+in-process golden — which is the required gate before any cutover. The momentum/signals path and its
+golden `sha256:eff10116…` are unchanged. **Untrusted sandboxed overlay-module execution (the
+per-bar-IPC `SandboxModuleExecutor` lift), the trading-lab cutover off `baselineOnlyComparison`, and
+retiring `sp4_mock` remain follow-ups (Slice 6b + after).**
+
 ## Layout
 
 ```
@@ -122,6 +143,18 @@ BACKTESTER_DATA_SOURCE=http BACKTESTER_DATA_API_URL=http://127.0.0.1:8081 pnpm s
 The HTTP path is parity-tested against the in-process reader (identical materialized tape +
 `dataset_fingerprint`). Tests that target an **external** data API are gated on
 `BACKTESTER_TEST_DATA_API_URL` and **skip** (never fail) when it is unset/unreachable.
+
+### Overlay engine (Slice 6a)
+
+Set `BACKTESTER_ENABLE_OVERLAY_ENGINE=true` to enable the lifted overlay engine — runs submitted with
+`engine:'overlay'` then execute the baseline+variant simulation and return a real `comparison` block;
+without it, `engine:'overlay'` submissions are rejected pre-queue with `validation_error` (the default
+`engine:'momentum'` path is unaffected). Deployments flip the flag on only once their CI runs the
+platform `verify_018` HTTP parity gate (`VERIFY_018_TARGET=http`) green against the service.
+
+```bash
+BACKTESTER_ENABLE_OVERLAY_ENGINE=true pnpm start
+```
 
 ## HTTP API (v1, bearer auth)
 
