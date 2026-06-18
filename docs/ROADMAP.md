@@ -137,7 +137,7 @@ The backtester reads historical data through the platform contract, not through 
 - integration tests across all three systems
 - failure-mode coverage for:
   - validation reject ✅ (inline bundle validation + HTTP error normalization in `validation-reject.test.ts`)
-  - sandbox failure
+  - sandbox failure ✅ (non-Docker failure modes in `sandbox-failure.test.ts`: `missing_module`, `sandbox_module_error` pre-Docker guard, `runner_failure`)
   - timeout ✅ (`run_deadline_exceeded` covered in `deadline-reaping.test.ts`)
   - missing dataset ✅ (`missing_dataset` covered in `deadline-reaping.test.ts`)
   - queue expiry ✅ (`queue_deadline_exceeded` covered in `deadline-reaping.test.ts`)
