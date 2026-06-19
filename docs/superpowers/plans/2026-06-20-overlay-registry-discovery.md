@@ -29,15 +29,16 @@ packages/sdk/src/client/client.ts                        # discoverRegistry()
 packages/sdk/test/registry-contract.test.ts              # NEW: pins the DTO shape
 apps/backtester/src/engine/registry-definition.ts        # NEW: TRUSTED_REGISTRY_DEFINITION + validation
 apps/backtester/src/engine/trusted-registry.ts           # refactor to build from the definition
-apps/backtester/src/jobs/fingerprint.ts                  # complete fn + verbatim legacyRequestFingerprint
-apps/backtester/src/jobs/submit.ts                       # conflict guard accepts legacy hash
+apps/backtester/src/jobs/fingerprint.ts                  # shared normalize + complete fn + storedRequestFingerprint
+apps/backtester/src/jobs/submit.ts                       # conflict guard recomputes stored fingerprint
 apps/backtester/src/api/registry-route.ts                # NEW: GET /v1/registry handler
 apps/backtester/src/api/server.ts                        # register the route
+apps/backtester/test/sdk-client-registry.test.ts         # NEW: discoverRegistry() fake-fetchImpl unit test
 apps/backtester/test/registry-endpoint.test.ts           # NEW
 apps/backtester/test/trusted-registry-parity.test.ts     # NEW
 apps/backtester/test/registry-definition.test.ts         # NEW
 apps/backtester/test/fingerprint.test.ts                 # extend (field-completeness regression)
-apps/backtester/test/idempotency.test.ts                 # extend (pre-deploy replay compat)
+apps/backtester/test/idempotency.test.ts                 # extend (old-row replay + changed-field negative)
 ```
 
 > **Cross-repo (trading-lab, Phase 3) files** are listed in Task 9 (a separate worktree under
@@ -198,44 +199,61 @@ git commit -m "feat(sdk): add registry discovery contract (0.2.0)"
 
 ### Task 3: SDK client `discoverRegistry()`
 
+> The SDK client is tested from `apps/backtester/test/` (importing the client from source —
+> `../../../packages/sdk/src/client/index`). The existing `sdk-client.test.ts` is an HTTP-integration
+> suite against a real app; this method is unit-tested in isolation with an injected `fetchImpl` so
+> Task 3 is self-contained and does NOT depend on the `/v1/registry` endpoint (Task 6). The endpoint's
+> real-app behavior is covered separately by Task 6.
+
 **Files:**
 - Modify: `packages/sdk/src/client/client.ts`
-- Modify: `packages/sdk/test/client.test.ts` (the existing fake-fetch client suite)
+- Create: `apps/backtester/test/sdk-client-registry.test.ts`
 
-- [ ] **Step 1: Write the failing fake-fetch test (RED)**
+- [ ] **Step 1: Write the failing fake-`fetchImpl` unit test (RED)**
 
-First read `packages/sdk/test/client.test.ts` to copy its exact client-construction + fake-`fetch` injection pattern (how `getCapabilities`/`listDatasets` are tested — the client takes an injectable `fetch`). Add a case that asserts `discoverRegistry()` issues `GET /v1/registry` with bearer auth and returns the parsed `RegistryDescriptor`:
+`BacktesterClient` accepts `fetchImpl?: FetchLike` where `FetchLike = (url, init?) => Promise<FetchLikeResponse>`,
+`init` is `{ method?, headers?: Record<string,string>, body? }`, and the response needs `{ ok, status, json(), text() }`.
+The client sends `authorization: 'Bearer <token>'`. Create `apps/backtester/test/sdk-client-registry.test.ts`:
 ```ts
-it('discoverRegistry() GETs /v1/registry with bearer auth and returns the descriptor', async () => {
-  const descriptor /*: RegistryDescriptor */ = {
-    contractVersion: '017.2', baselines: [{ id: 'short_after_pump', version: '0.1.0' }],
-    overlays: [], riskProfiles: [], execProfiles: [],
-    metricCatalogs: { momentum: [], overlay: ['pnl'] },
-    overlayRunPresets: [{ id: 'default-overlay', baselineRef: { id: 'short_after_pump', version: '0.1.0' },
-      riskProfileRef: { id: 'default_risk', version: '1.0.0' }, executionProfileRef: { id: 'default_exec', version: '1.0.0' },
-      metrics: ['pnl'] }],
-  };
-  const calls: Array<{ url: string; method?: string; auth?: string }> = [];
-  const fakeFetch = async (url: string, init?: { method?: string; headers?: Record<string, string> }) => {
-    calls.push({ url, method: init?.method, auth: init?.headers?.['authorization'] ?? init?.headers?.['Authorization'] });
-    return { ok: true, status: 200, json: async () => descriptor } as Response;
-  };
-  // Construct the client EXACTLY as the sibling cases do (baseUrl + token + injected fetch).
-  const client = makeClient({ fetch: fakeFetch as typeof fetch });
-  const got = await client.discoverRegistry();
-  expect(got).toEqual(descriptor);
-  expect(calls.at(-1)?.url).toMatch(/\/v1\/registry$/);
-  expect(calls.at(-1)?.method ?? 'GET').toBe('GET');
-  expect(calls.at(-1)?.auth).toMatch(/^Bearer /);
+import { describe, expect, it } from 'vitest';
+import { BacktesterClient } from '../../../packages/sdk/src/client/index';
+import type { FetchLike, FetchLikeResponse } from '../../../packages/sdk/src/client/client';
+import type { RegistryDescriptor } from '../../../packages/sdk/src/contracts/index';
+
+describe('BacktesterClient.discoverRegistry', () => {
+  it('GETs /v1/registry with bearer auth and returns the descriptor', async () => {
+    const descriptor: RegistryDescriptor = {
+      contractVersion: '017.2',
+      baselines: [{ id: 'short_after_pump', version: '0.1.0' }],
+      overlays: [], riskProfiles: [], execProfiles: [],
+      metricCatalogs: { momentum: [], overlay: ['pnl'] },
+      overlayRunPresets: [{
+        id: 'default-overlay',
+        baselineRef: { id: 'short_after_pump', version: '0.1.0' },
+        riskProfileRef: { id: 'default_risk', version: '1.0.0' },
+        executionProfileRef: { id: 'default_exec', version: '1.0.0' },
+        metrics: ['pnl'],
+      }],
+    };
+    const calls: Array<{ url: string; method?: string; auth?: string }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, method: init?.method, auth: init?.headers?.['authorization'] });
+      return { ok: true, status: 200, json: async () => descriptor, text: async () => '' } satisfies FetchLikeResponse;
+    };
+    const client = new BacktesterClient({ baseUrl: 'http://bt.test', token: 'test-token', fetchImpl });
+    const got = await client.discoverRegistry();
+    expect(got).toEqual(descriptor);
+    expect(calls.at(-1)?.url).toBe('http://bt.test/v1/registry');
+    expect(calls.at(-1)?.method).toBe('GET');
+    expect(calls.at(-1)?.auth).toBe('Bearer test-token');
+  });
 });
 ```
-(Replace `makeClient(...)` with the suite's actual constructor call. If the suite stubs the global `fetch` instead of injecting it, follow that mechanism instead — match the file, don't invent a new one.)
-
-Run `pnpm vitest run packages/sdk/test/client.test.ts` → RED (`discoverRegistry` is not a function).
+Run `pnpm vitest run apps/backtester/test/sdk-client-registry.test.ts` → RED (`discoverRegistry` is not a function).
 
 - [ ] **Step 2: Add the method**
 
-In `packages/sdk/src/client/client.ts` add an import of `RegistryDescriptor` from `../contracts/index` and a method that mirrors `getCapabilities`:
+In `packages/sdk/src/client/client.ts` add an import of `RegistryDescriptor` from `../contracts/index` and a method that mirrors `getCapabilities` (returns the body directly — the endpoint returns the descriptor, not a wrapper):
 ```ts
 discoverRegistry(): Promise<RegistryDescriptor> {
   return this.request('GET', '/v1/registry');
@@ -244,7 +262,7 @@ discoverRegistry(): Promise<RegistryDescriptor> {
 
 - [ ] **Step 3: GREEN + build + typecheck**
 ```bash
-pnpm vitest run packages/sdk/test/client.test.ts
+pnpm vitest run apps/backtester/test/sdk-client-registry.test.ts
 pnpm --filter @trading-backtester/sdk build
 pnpm typecheck
 ```
@@ -252,7 +270,7 @@ Expected: PASS, exit 0.
 
 - [ ] **Step 4: Commit**
 ```bash
-git add packages/sdk/src/client/client.ts packages/sdk/test/client.test.ts
+git add packages/sdk/src/client/client.ts apps/backtester/test/sdk-client-registry.test.ts
 git commit -m "feat(sdk): add discoverRegistry() client method"
 ```
 
@@ -424,20 +442,26 @@ git commit -m "refactor(engine): canonical TRUSTED_REGISTRY_DEFINITION + fail-fa
 
 > **Compatibility context (read before implementing):** `requestFingerprint` is NOT the idempotency
 > key — the dedup key is `resumeToken` (via `JobStore.insertOrGet`). The fingerprint is used ONLY in
-> `submitRun`'s conflict guard (`submit.ts`): when a `resumeToken` resolves to an existing job and
-> `job.requestFingerprint !== fingerprint`, it throws `409 resume_token_conflict`. Changing the
-> fingerprint algorithm would therefore make a **legitimate idempotent replay of a pre-deploy job**
-> (same request, same `resumeToken`, submitted again after this deploy) compute a different hash and
-> get a FALSE `409`. Fix: keep a verbatim `legacyRequestFingerprint` (the current 10-field algorithm)
-> and accept EITHER hash in the conflict guard. New jobs store the new hash; pre-deploy jobs still
-> match via the legacy hash. A genuinely different request still mismatches both → real 409. This
-> changes no `result_hash` (the fingerprint is not part of the hashed `RunOutcome`).
+> `submitRun`'s conflict guard (`submit.ts:151`): when a `resumeToken` resolves to an existing job and
+> the fingerprints mismatch, it throws `409 resume_token_conflict`. Naively changing the algorithm
+> would (a) make a legitimate replay of a **pre-deploy** job get a FALSE `409` (stored hash used an
+> older algorithm), and — if "fixed" with a loose legacy-hash fallback — (b) silently ACCEPT a replay
+> that changed a field the legacy hash ignored (e.g. `riskProfileRef`), which is a worse integrity bug.
+>
+> **Correct fix — recompute, don't store-compare.** The guard recomputes the STORED job's fingerprint
+> with the CURRENT algorithm from `job.request` + `job.bundleHash`, and compares it to the incoming
+> request's current fingerprint. This is exact: `bundleStore.put(bundle)` returns the same value as
+> `bundleHash(bundle)` (`= contentRef(bundle)`), so the stored `job.bundleHash` reproduces the inline
+> `bundleHash(moduleBundle)` the original submit hashed. Result: identical request → match (no false
+> 409, regardless of which algorithm wrote the row); ANY changed run-affecting field → mismatch → real
+> 409. No legacy hash function is needed, and the stored `job.requestFingerprint` field is no longer
+> read by the guard. Changes no `result_hash` (the fingerprint is not part of the hashed `RunOutcome`).
 
 **Files:**
-- Modify: `apps/backtester/src/jobs/fingerprint.ts` (new complete fn + verbatim `legacyRequestFingerprint`)
-- Modify: `apps/backtester/src/jobs/submit.ts` (conflict guard accepts legacy hash)
+- Modify: `apps/backtester/src/jobs/fingerprint.ts` (shared `normalize` + complete `requestFingerprint` + `storedRequestFingerprint`)
+- Modify: `apps/backtester/src/jobs/submit.ts` (conflict guard recomputes the stored fingerprint)
 - Modify: `apps/backtester/test/fingerprint.test.ts` (field-completeness regression)
-- Modify: `apps/backtester/test/idempotency.test.ts` (pre-deploy replay compatibility)
+- Modify: `apps/backtester/test/idempotency.test.ts` (replay-of-old-row positive + changed-field negative)
 
 - [ ] **Step 1: Write failing field-completeness regression tests**
 
@@ -465,43 +489,26 @@ it('distinguishes risk/exec/robustness', () => {
 ```
 Run → RED (current fingerprint omits these → equal).
 
-- [ ] **Step 2: Extend `requestFingerprint` + keep `legacyRequestFingerprint` verbatim**
+- [ ] **Step 2: Extend `requestFingerprint` + add `storedRequestFingerprint` (shared `normalize`)**
 
-Rewrite `apps/backtester/src/jobs/fingerprint.ts`. `legacyRequestFingerprint` is the CURRENT 10-field
-body copied EXACTLY (do not "improve" it — it must reproduce pre-deploy stored hashes byte-for-byte):
+Rewrite `apps/backtester/src/jobs/fingerprint.ts`. A single `normalize` builds the hashed object; the
+bundle hash is passed in explicitly so a stored job (bundle bytes already replaced by a content hash)
+recomputes byte-identically:
 ```ts
 import type { RunSubmitRequest } from '@trading-backtester/sdk/contracts';
+import type { ContentHash } from '@trading-backtester/sdk/artifacts';
 import { canonicalJson } from '../determinism/canonical-json';
 import { sha256Hex } from '../determinism/hash';
 import { bundleHash } from '../sandbox/bundle';
 
-/**
- * Pre-2026-06 fingerprint (run-affecting fields BEFORE engine/overlay fields were added). Retained ONLY
- * so the conflict guard can still match `resumeToken` replays of jobs submitted before this deploy.
- * Do not extend — its output must stay byte-stable for already-stored rows.
- */
-export function legacyRequestFingerprint(req: RunSubmitRequest): string {
-  const normalized = {
+// ALL run-affecting fields. `bundleHashValue` = content hash of the submitted bundle (null for trusted
+// runs), passed in so an incoming submit (bundle bytes present) and a stored job (bundle already a hash)
+// produce the SAME object for the same request.
+function normalize(req: RunSubmitRequest, bundleHashValue: ContentHash | null) {
+  return {
     datasetRef: req.datasetRef,
     moduleRef: req.moduleRef,
-    moduleBundle: req.moduleBundle ? bundleHash(req.moduleBundle) : null,
-    symbols: req.symbols,
-    timeframe: req.timeframe,
-    period: req.period,
-    params: req.params ?? null,
-    seed: req.seed,
-    mode: req.mode,
-    metrics: req.metrics ?? [],
-  };
-  return sha256Hex(canonicalJson(normalized));
-}
-
-/** Current fingerprint: all run-affecting fields, including the overlay-engine inputs. */
-export function requestFingerprint(req: RunSubmitRequest): string {
-  const normalized = {
-    datasetRef: req.datasetRef,
-    moduleRef: req.moduleRef,
-    moduleBundle: req.moduleBundle ? bundleHash(req.moduleBundle) : null,
+    moduleBundle: bundleHashValue,
     symbols: req.symbols,
     timeframe: req.timeframe,
     period: req.period,
@@ -516,67 +523,100 @@ export function requestFingerprint(req: RunSubmitRequest): string {
     executionProfileRef: req.executionProfileRef ?? null,
     robustnessChecks: req.robustnessChecks ?? [],
   };
-  return sha256Hex(canonicalJson(normalized));
+}
+
+/** Fingerprint of an INCOMING submit request (bundle bytes present → hashed inline). */
+export function requestFingerprint(req: RunSubmitRequest): string {
+  return sha256Hex(canonicalJson(normalize(req, req.moduleBundle ? bundleHash(req.moduleBundle) : null)));
+}
+
+/**
+ * Fingerprint of an ALREADY-STORED job, recomputed with the CURRENT algorithm from its persisted
+ * `request` + content-addressed bundle hash. Equals `requestFingerprint(originalBody)` exactly because
+ * `bundleStore.put` returns the same `bundleHash` that the inline path hashes. The idempotency conflict
+ * guard uses this so a `resumeToken` replay is judged identical iff EVERY run-affecting field matches —
+ * independent of which algorithm version wrote the stored row.
+ */
+export function storedRequestFingerprint(req: RunSubmitRequest, bundleHashValue: ContentHash | null): string {
+  return sha256Hex(canonicalJson(normalize(req, bundleHashValue)));
 }
 ```
 
-- [ ] **Step 3: GREEN on field-completeness + commit nothing yet**
+- [ ] **Step 3: GREEN on field-completeness**
 ```bash
 pnpm vitest run apps/backtester/test/fingerprint.test.ts
 ```
 Expected: the Step-1 regression cases PASS.
 
-- [ ] **Step 4: Write the failing pre-deploy replay test (RED)**
+- [ ] **Step 4: Write the failing replay tests — positive (old row) AND negative (changed field)**
 
-In `apps/backtester/test/idempotency.test.ts` (read it first to reuse its in-memory-store `deps` builder),
-add a case that simulates a job stored BEFORE the deploy (its `requestFingerprint` is the legacy hash),
-then resubmits the same body+`resumeToken` and asserts NO conflict:
+In `apps/backtester/test/idempotency.test.ts` (read it first to reuse its in-memory-store deps + valid
+request builder), seed a job as if written by an OLDER algorithm (its stored `requestFingerprint` is a
+placeholder the guard no longer reads), then exercise both replay directions:
 ```ts
-import { legacyRequestFingerprint, requestFingerprint } from '../src/jobs/fingerprint';
+import { storedRequestFingerprint, requestFingerprint } from '../src/jobs/fingerprint';
 
-it('replays a pre-deploy job (legacy fingerprint) without a resume_token_conflict', async () => {
-  const deps = makeDeps(); // mirror the existing idempotency deps builder (in-memory store + clock + uid)
-  const body = { /* a valid overlay RunSubmitRequest */ ...overlayBody, resumeToken: 'rt-legacy-1' } as RunSubmitRequest;
-  // Seed the store as if submitted before the deploy: stored hash = legacy algorithm.
+// `makeDeps` / the valid-request builder: mirror this file's existing helpers (in-memory store + clock + uid).
+const overlayBody = { /* a valid overlay RunSubmitRequest: engine:'overlay', moduleRef, overlayRefs,
+  riskProfileRef:{id:'default_risk',version:'1.0.0'}, executionProfileRef:{id:'default_exec',version:'1.0.0'},
+  datasetRef, symbols, timeframe, period, seed, mode:'research', metrics:['pnl'] */ } as RunSubmitRequest;
+
+async function seedOldRow(deps, runId, resumeToken, request) {
   await deps.store.insertOrGet({
-    jobId: 'run-legacy-1', runId: 'run-legacy-1', resumeToken: 'rt-legacy-1',
-    requestFingerprint: legacyRequestFingerprint(body),
-    request: { ...body, runId: 'run-legacy-1', metrics: body.metrics ?? [] },
-    effectiveSeed: body.seed, datasetRef: body.datasetRef,
+    jobId: runId, runId, resumeToken,
+    requestFingerprint: 'sha256:older-algorithm-row', // simulates a row written before this deploy
+    request: { ...request, runId, metrics: request.metrics ?? [] },
+    effectiveSeed: request.seed, datasetRef: request.datasetRef,
     queueDeadlineMs: 0, runTimeoutMs: 0, acceptedAtMs: 0,
   } as any);
-  expect(legacyRequestFingerprint(body)).not.toBe(requestFingerprint(body)); // proves the algorithm changed
-  const outcome = await submitRun(deps, body); // must NOT throw 409
+}
+
+it('replays a job stored by an older algorithm without a false conflict', async () => {
+  const deps = makeDeps();
+  const body = { ...overlayBody, resumeToken: 'rt-1' } as RunSubmitRequest;
+  await seedOldRow(deps, 'run-1', 'rt-1', body);
+  const outcome = await submitRun(deps, body); // identical request → idempotent replay, NO 409
   expect(outcome.created).toBe(false);
 });
+
+it('rejects a replay that changed a field the older hash ignored (e.g. riskProfileRef)', async () => {
+  const deps = makeDeps();
+  const stored = { ...overlayBody, resumeToken: 'rt-2', riskProfileRef: { id: 'default_risk', version: '1.0.0' } } as RunSubmitRequest;
+  await seedOldRow(deps, 'run-2', 'rt-2', stored);
+  const changed = { ...stored, riskProfileRef: { id: 'long_only_risk', version: '1.0.0' } };
+  await expect(submitRun(deps, changed)).rejects.toMatchObject({ statusCode: 409, code: 'resume_token_conflict' });
+  // sanity: the change is invisible to the old 10-field hash but visible to the current one
+  expect(storedRequestFingerprint(stored, null)).not.toBe(requestFingerprint(changed));
+});
 ```
-Run → RED (current guard compares only the new hash → throws `resume_token_conflict`).
+Run → RED (the current guard compares the stored hash literally → the positive case throws a false 409).
 
-- [ ] **Step 5: Make the conflict guard accept the legacy hash**
+- [ ] **Step 5: Recompute the stored fingerprint in the conflict guard**
 
-In `apps/backtester/src/jobs/submit.ts`, import `legacyRequestFingerprint` alongside `requestFingerprint`
-and widen the guard:
+In `apps/backtester/src/jobs/submit.ts`, import `storedRequestFingerprint` alongside `requestFingerprint`
+and replace the literal comparison:
 ```ts
   const { job, created } = await deps.store.insertOrGet(newJob);
   if (!created) {
-    if (job.requestFingerprint !== fingerprint && job.requestFingerprint !== legacyRequestFingerprint(body)) {
+    if (storedRequestFingerprint(job.request, job.bundleHash ?? null) !== fingerprint) {
       throw new SubmitError(409, 'resume_token_conflict', 'resume token reused with a different request');
     }
     return { handle: toHandle(job, true), created: false };
   }
 ```
-(New jobs are still stored with the NEW `fingerprint` from `requestFingerprint(body)` — only the guard is widened.)
+(`job.request` and `job.bundleHash` are on the returned `JobRow`. New jobs are still STORED with the
+new `fingerprint`; the guard simply no longer trusts that stored value and recomputes from the request.)
 
 - [ ] **Step 6: GREEN + confirm result goldens unaffected**
 ```bash
 pnpm vitest run apps/backtester/test/fingerprint.test.ts apps/backtester/test/idempotency.test.ts apps/backtester/test/determinism.test.ts
 ```
-Expected: all PASS; `result_hash` goldens UNCHANGED. If an idempotency test pins a LITERAL fingerprint value, update that literal (the fingerprint key changed by design); do NOT touch any `result_hash` golden.
+Expected: all PASS (both replay directions); `result_hash` goldens UNCHANGED. If an idempotency test pins a LITERAL fingerprint value, update that literal (the fingerprint key changed by design); do NOT touch any `result_hash` golden.
 
 - [ ] **Step 7: Commit**
 ```bash
 git add apps/backtester/src/jobs/fingerprint.ts apps/backtester/src/jobs/submit.ts apps/backtester/test/fingerprint.test.ts apps/backtester/test/idempotency.test.ts
-git commit -m "fix(jobs): complete request fingerprint; keep legacy hash for idempotent replay compat"
+git commit -m "fix(jobs): complete request fingerprint; recompute stored fingerprint for replay integrity"
 ```
 
 ---
@@ -703,20 +743,35 @@ The `.github/workflows/sdk-release.yml` already takes a `version` input and chec
 > - **MCP (platform)** — supports `baseline_ref` ONLY (its existing behavior); REJECTS `registry_preset`.
 > - **Mock** — supports BOTH (its result is synthetic, independent of selection).
 
-**WORKTREE:** create a NEW worktree for the lab work. From the shared lab checkout's git (do NOT switch its branch):
-```bash
-cd /home/alexxxnikolskiy/projects/trading-lab
-git worktree add .worktrees/feat-overlay-presets -b feat/overlay-presets origin/main
-cd .worktrees/feat-overlay-presets && pnpm install
-```
-(This requires `sdk-v0.2.0` published; bump the `@trading-backtester/sdk` dep to the 0.2.0 release URL in `package.json` first, then `pnpm install`.)
+**Prerequisite:** `sdk-v0.2.0` must already be PUBLISHED (Task 8, human-gated) — Step 0 installs from its release tarball.
 
 **Files (in the worktree):**
+- Modify: `package.json` (re-pin `@trading-backtester/sdk` → 0.2.0 release URL) + `pnpm-lock.yaml`
 - Modify: `src/ports/research-platform.port.ts` (`SubmitOverlayRunOptions`)
 - Modify: `src/adapters/platform/http-backtester.adapter.ts` (+ its `BacktesterClientLike`)
 - Modify: `src/adapters/platform/mock-research-platform.adapter.ts`
 - Modify: `src/adapters/platform/mcp-research-platform.adapter.ts` (and any other `ResearchPlatformPort` impl)
 - Modify: every call site + test surfaced in Step 1
+
+- [ ] **Step 0: Create the worktree, re-pin the SDK to 0.2.0, install, commit the lockfile**
+
+From the shared lab checkout's git — do NOT switch its branch:
+```bash
+cd /home/alexxxnikolskiy/projects/trading-lab
+git worktree add .worktrees/feat-overlay-presets -b feat/overlay-presets origin/main
+cd .worktrees/feat-overlay-presets
+```
+In `package.json`, change the `@trading-backtester/sdk` dependency from the 0.1.0 release tarball to 0.2.0:
+```
+"@trading-backtester/sdk": "https://github.com/alexnikolskiy/trading-backtester/releases/download/sdk-v0.2.0/trading-backtester-sdk-0.2.0.tgz"
+```
+Then install (this rewrites `pnpm-lock.yaml` to the new tarball + integrity) and commit BOTH:
+```bash
+pnpm install
+git add package.json pnpm-lock.yaml
+git commit -m "build: pin @trading-backtester/sdk to v0.2.0 release"
+```
+(If `pnpm install` fails to fetch the tarball, `sdk-v0.2.0` is not published yet — STOP and return to Task 8.)
 
 - [ ] **Step 1: Enumerate ALL call sites and tests before changing the port**
 
@@ -724,7 +779,8 @@ cd .worktrees/feat-overlay-presets && pnpm install
 grep -rn 'submitOverlayRun\|baselineModuleRef\|SubmitOverlayRunOptions' src test 2>/dev/null
 ```
 Write the resulting list into the task notes — every production caller AND every test that constructs
-`SubmitOverlayRunOptions` or calls `submitOverlayRun` must be migrated in this task. Do not proceed
+`SubmitOverlayRunOptions` or calls `submitOverlayRun` must be migrated in this task. (Tests in this repo
+are colocated under `src/`; a top-level `test/` may also exist — the `grep` covers both.) Do not proceed
 until the list is complete (the port change will not typecheck until all of them are updated).
 
 - [ ] **Step 2: Migrate the port options to a discriminated `target`**
@@ -785,8 +841,11 @@ pnpm test
 Expected: typecheck 0; unit/adapter suites green (incl. the new HTTP-adapter target tests); the cross-repo e2e SKIPS without its env gate.
 
 - [ ] **Step 8: Commit (single working commit)**
+
+The SDK re-pin (`package.json` + `pnpm-lock.yaml`) was already committed in Step 0; this commit lands the
+code + colocated/`test/` changes. Use `-A` so every migrated call site is staged regardless of directory:
 ```bash
-git add src test
+git add -A
 git commit -m "feat(platform): discriminated overlay-run target + preset-driven backtester submission"
 ```
 
