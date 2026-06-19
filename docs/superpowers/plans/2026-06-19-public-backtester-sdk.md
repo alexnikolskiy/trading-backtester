@@ -42,8 +42,9 @@ packages/sdk/
 │   ├── index.ts                         # identity/capability-only root
 │   ├── internal/
 │   │   ├── versions.ts                  # single source for SDK/contract versions
-│   │   ├── canonical-json.ts            # stable JSON serialization
-│   │   └── content-hash.ts              # sha256 content references
+│   │   ├── shared-types.ts              # ContentHash (re-exported by contracts + artifacts)
+│   │   ├── canonical-json.ts            # canonicalJson + quantizeContractNumber (decimal.js)
+│   │   └── content-hash.ts              # sha256Hex / contentRef / canonicalBundleHash
 │   ├── contracts/
 │   │   ├── index.ts                     # curated contract facade
 │   │   ├── versions.ts                  # SDK/API/bundle/artifact versions
@@ -94,6 +95,8 @@ apps/backtester/test/sdk-client.test.ts
 apps/backtester/test/contract-merge-guard.test.ts
 package.json
 pnpm-lock.yaml
+vitest.config.ts
+tsconfig.json
 Dockerfile
 .github/workflows/ci.yml
 .github/workflows/sdk-release.yml
@@ -115,11 +118,14 @@ docs/ARCHITECTURE.md
 - Create: `packages/sdk/tsup.config.ts`
 - Create: `packages/sdk/src/index.ts`
 - Create: `packages/sdk/src/internal/versions.ts`
+- Create: `packages/sdk/src/internal/shared-types.ts`
 - Create: `packages/sdk/src/contracts/index.ts`
 - Create: `packages/sdk/src/builder/index.ts`
 - Create: `packages/sdk/src/client/index.ts`
 - Create: `packages/sdk/src/artifacts/index.ts`
 - Create: `packages/sdk/test/package-shape.test.ts`
+- Modify: `vitest.config.ts`
+- Modify: `tsconfig.json`
 - Modify: `pnpm-lock.yaml`
 
 - [ ] **Step 1: Write a failing package-shape test**
@@ -195,6 +201,9 @@ Create `packages/sdk/package.json` with this public shape:
     "test": "vitest run test",
     "prepack": "pnpm build"
   },
+  "dependencies": {
+    "decimal.js": "^10.4.3"
+  },
   "devDependencies": {
     "tsup": "^8.3.5",
     "typescript": "^5.7.2",
@@ -202,6 +211,10 @@ Create `packages/sdk/package.json` with this public shape:
   }
 }
 ```
+
+`decimal.js` is the SDK's only runtime dependency (it backs the canonical-number
+quantizer moved in Task 4). It is an explicit registry dependency, not an
+implicitly bundled import.
 
 Create `packages/sdk/tsup.config.ts`:
 
@@ -236,6 +249,10 @@ export const BUNDLE_CONTRACT_VERSION = '019.1' as const;
 export const HISTORICAL_DATA_CONTRACT_VERSION = '030.1' as const;
 export const SUPPORTED_API_CONTRACT_VERSIONS = [API_CONTRACT_VERSION] as const;
 
+// packages/sdk/src/internal/shared-types.ts
+// Single definition of the content-hash brand; re-exported by both contracts and artifacts.
+export type ContentHash = `sha256:${string}`;
+
 // packages/sdk/src/index.ts
 export { SDK_VERSION, SUPPORTED_API_CONTRACT_VERSIONS } from './internal/versions';
 export const SDK_CAPABILITIES = Object.freeze({
@@ -248,6 +265,35 @@ export const SDK_CAPABILITIES = Object.freeze({
 
 The four subpath `index.ts` files initially contain `export {};` so the export
 map builds before the domain declarations arrive.
+
+Extend the root test/typecheck globs so the SDK package is covered by the full
+gates (not only by explicit-path invocations). In `vitest.config.ts` change the
+include to:
+
+```ts
+include: [
+  'apps/**/test/**/*.test.ts',
+  'packages/**/test/**/*.test.ts',
+  'scripts/**/*.test.ts',
+],
+```
+
+In `tsconfig.json` extend `include` to add `packages/*/test` and `scripts/**/*.ts`:
+
+```json
+"include": [
+  "packages/*/src",
+  "packages/*/test",
+  "apps/*/src",
+  "apps/*/test",
+  "scripts/**/*.ts",
+  "vitest.config.ts"
+]
+```
+
+The root `vitest` global setup (`apps/backtester/scripts/vitest-global-setup.mjs`)
+still runs for the added suites; this is acceptable. The package-shape test must
+now also pass under a full `pnpm test` run, not only under a direct path.
 
 - [ ] **Step 4: Install and verify GREEN**
 
@@ -371,10 +417,20 @@ contracts/validation.ts
 contracts/capabilities.ts
   CapabilityDescriptor, DatasetDescriptor
 
+internal/shared-types.ts
+  ContentHash  (single definition; created in Task 1)
+
 artifacts/types.ts
-  ContentHash, ArtifactAvailability, ArtifactReference,
+  ArtifactAvailability, ArtifactReference,
   ArtifactDescriptor, ArtifactManifest, ArtifactPage
+  (imports ContentHash from ../internal/shared-types; re-exports it)
 ```
+
+`contracts/run.ts` and `contracts/module.ts` import `ContentHash` from
+`../internal/shared-types` (e.g. `RunEvidence.bundleHash`,
+`RunResultSummary.resultHash`, `ArtifactReference.artifactId`). Both
+`contracts/index.ts` and `artifacts/index.ts` re-export `ContentHash` so each
+facade is self-contained and neither imports the other.
 
 Keep every field and optionality equal to the current service wire DTO. Do not
 copy comments that claim the new SDK is vendored. Re-export the single version
@@ -407,12 +463,14 @@ Use curated exports only:
 ```ts
 // contracts/index.ts
 export * from './versions';
+export type { ContentHash } from '../internal/shared-types';
 export type * from './module';
 export type * from './run';
 export type * from './validation';
 export type * from './capabilities';
 
 // artifacts/index.ts
+export type { ContentHash } from '../internal/shared-types';
 export type * from './types';
 export { isContentHash } from './guards';
 ```
@@ -504,9 +562,13 @@ Run and expect missing authoring types.
 
 - [ ] **Step 2: Define the exact current executable ABIs**
 
-Create `contracts/authoring.ts` by moving the public authoring-facing subset of
-the existing research types: bars, point-in-time context, decisions and hooks.
-The exported top-level shapes must include:
+Create `contracts/authoring.ts` by deriving the public authoring-facing subset
+**explicitly from `packages/research-contracts/src/research/context.ts`**:
+`StrategyContext`, the bar/candle and point-in-time shapes, the closed decision
+vocabularies (`StrategyDecision`, `OverlayDecision`) and the lifecycle hooks.
+Copy only those names; the file must not import or transitively reference
+engine-only types (portfolio, execution, indicator, market-tape), storage rows
+or sandbox IPC/session models. The exported top-level shapes must include:
 
 ```ts
 export type MomentumSignals = (
@@ -565,7 +627,13 @@ consume the SDK copies.
 Extend `authoring-contract.test.ts` to call `allSchemaAssets()`, assert all five
 assets load, their `$id` values equal `SCHEMA_IDS`, and the returned objects are
 deep-equal to the current private assets. This parity assertion prevents drift
-while the compatibility copies coexist. Run:
+while the compatibility copies coexist.
+
+Add a **version value-parity** assertion in the same test: import
+`API_CONTRACT_VERSION` from `sdk/contracts` and `CONTRACT_VERSION` from
+`@trading/research-contracts`, and assert they are equal (`017.2`). This keeps
+the renamed SDK constant locked to the still-frozen private constant for the
+coexistence window. Run:
 
 ```bash
 pnpm vitest run packages/sdk/test/authoring-contract.test.ts
@@ -583,7 +651,13 @@ git commit -m "feat(sdk): publish executable ABI and schema assets"
 
 ---
 
-### Task 4: Implement the deterministic builder and share bundle hashing with the service
+### Task 4: Move the determinism core into the SDK and implement the deterministic builder
+
+This task implements **option (a)** for the determinism core: the canonical-JSON
+serializer, the contract-number quantizer and content hashing become a single
+source of truth inside the SDK. The service's existing determinism modules turn
+into thin re-export wrappers, so every current service/test import keeps working
+while the implementation is no longer duplicated.
 
 **Files:**
 - Create: `packages/sdk/src/internal/canonical-json.ts`
@@ -594,9 +668,18 @@ git commit -m "feat(sdk): publish executable ABI and schema assets"
 - Create: `packages/sdk/src/builder/preflight.ts`
 - Modify: `packages/sdk/src/builder/index.ts`
 - Create: `packages/sdk/test/builder.test.ts`
+- Modify: `apps/backtester/src/determinism/canonical-json.ts` (→ thin wrapper)
+- Modify: `apps/backtester/src/determinism/hash.ts` (→ thin wrapper)
 - Modify: `apps/backtester/src/sandbox/bundle.ts`
-- Modify: `apps/backtester/src/determinism/hash.ts`
 - Modify: `apps/backtester/test/bundle.test.ts`
+- Modify: `apps/backtester/package.json` (add SDK workspace dependency)
+- Modify: `package.json` (add `sdk:build` + `pretypecheck`/`pretest` hooks)
+- Modify: `pnpm-lock.yaml`
+
+Note: `apps/backtester/src/engine/sandbox/bundle-hash.ts::computeBundleHash`
+(the sandbox-integrity hash over a materialized directory) is **out of scope**
+and is not renamed or touched. The SDK's public builder hash is named
+`computeInlineBundleHash` to avoid the collision.
 
 - [ ] **Step 1: Write failing builder tests**
 
@@ -605,7 +688,7 @@ Cover stable construction, insertion-order independence and unsafe paths:
 ```ts
 import { describe, expect, it } from 'vitest';
 import {
-  computeBundleHash,
+  computeInlineBundleHash,
   createModuleBundle,
   createModuleManifest,
   preflightValidateBundle,
@@ -629,20 +712,22 @@ describe('SDK builder', () => {
       entry: 'index.js',
       files: { 'index.js': 'export default () => ({ apply: () => null })', 'z.js': 'z' },
     });
-    expect(computeBundleHash(a)).toBe(computeBundleHash(b));
+    expect(computeInlineBundleHash(a)).toBe(computeInlineBundleHash(b));
   });
 
-  it('rejects traversal and missing entry files in stable order', () => {
+  it('rejects traversal and missing entry files with authoritative-compatible codes', () => {
     const report = preflightValidateBundle({
       manifest,
       entry: 'missing.js',
       files: { '../escape.js': 'bad' },
     }, { engine: 'overlay' });
     expect(report.status).toBe('rejected');
-    expect(report.issues.map((issue) => issue.code)).toEqual([
-      'bundle_entrypoint_invalid',
-      'bundle_path_invalid',
-    ]);
+    // Reuse the service's authoritative code; do NOT invent bundle_path_invalid.
+    expect(new Set(report.issues.map((issue) => issue.code)))
+      .toEqual(new Set(['bundle_entrypoint_invalid']));
+    // Issues remain sorted by (path ?? '', code) for stable author output.
+    const keys = report.issues.map((i) => `${i.path ?? ''} ${i.code}`);
+    expect(keys).toEqual([...keys].sort());
   });
 });
 ```
@@ -655,38 +740,80 @@ pnpm vitest run packages/sdk/test/builder.test.ts
 
 Expected: FAIL because builder functions do not exist.
 
-- [ ] **Step 3: Move canonical serialization into the SDK**
+- [ ] **Step 3: Move the determinism core into the SDK (verbatim semantics)**
 
 Move the existing deterministic implementation from
 `apps/backtester/src/determinism/canonical-json.ts` and
-`apps/backtester/src/determinism/hash.ts` without changing its semantics:
+`apps/backtester/src/determinism/hash.ts` into the SDK **byte-for-byte**. This is
+behavior-critical code (AGENTS.md invariant #1); do not simplify it. In
+particular `canonical-json.ts` quantizes numbers via **`decimal.js`** (scale 8,
+`ROUND_HALF_EVEN`, `-0 → 0`, fixed non-exponential notation, trailing `\n`,
+recursive sorted keys, array order preserved). Carry that implementation across
+unchanged and keep the public `quantize` helper, renamed to
+`quantizeContractNumber`:
 
 ```ts
-export function canonicalJson(value: unknown): string {
-  return `${serialize(value)}\n`;
-}
+// internal/canonical-json.ts  (decimal.js-backed; moved verbatim from the service)
+export function quantizeContractNumber(n: number): number { /* existing quantize body */ }
+export function canonicalJson(value: unknown): string { /* existing body, unchanged */ }
 
+// internal/content-hash.ts
 export function sha256Hex(input: string): string {
   return createHash('sha256').update(input, 'utf8').digest('hex');
 }
-
 export function contentRef(payload: unknown): ContentHash {
   return `sha256:${sha256Hex(canonicalJson(payload))}`;
 }
-
 export function canonicalBundleHash(bundle: ModuleBundle): ContentHash {
   return contentRef(bundle);
 }
 ```
 
-Export `canonicalBundleHash` from `/contracts` as the low-level shared primitive.
-`computeBundleHash` in `/builder` delegates to it. The service imports
-`canonicalBundleHash` from `@trading-backtester/sdk/contracts`; there must be
-only one serialization and hash algorithm. Add this curated export:
+`ContentHash` is imported from `../internal/shared-types`; `ModuleBundle` from
+`../contracts/module` (type-only, so no runtime cycle).
+
+Export the protocol primitives from `/contracts` as the single source of truth:
 
 ```ts
-export { canonicalBundleHash } from '../internal/content-hash';
+// contracts/index.ts
+export { canonicalJson, quantizeContractNumber } from '../internal/canonical-json';
+export { sha256Hex, contentRef, canonicalBundleHash } from '../internal/content-hash';
 ```
+
+Wire the SDK as a built workspace dependency **before** converting the wrappers,
+because the wrappers import the compiled `@trading-backtester/sdk/contracts`:
+
+- add `"@trading-backtester/sdk": "workspace:*"` to `apps/backtester/package.json`;
+- add the root `sdk:build` script and lifecycle hooks so the SDK `dist` exists
+  before any service typecheck/test (these are also referenced by Task 6 Step 2
+  and Task 7 Step 4 — introduce them here):
+
+  ```json
+  "sdk:build": "pnpm --filter @trading-backtester/sdk build",
+  "pretypecheck": "pnpm sdk:build",
+  "pretest": "pnpm sdk:build && pnpm run build:sandbox-harness-overlay"
+  ```
+
+- run `pnpm install` then `pnpm sdk:build`.
+
+Then convert the two service determinism files into **thin re-export wrappers**
+so existing service and golden-test imports (`'../determinism/hash'`,
+`'../determinism/canonical-json'`) keep resolving with no behavior change and no
+second implementation:
+
+```ts
+// apps/backtester/src/determinism/canonical-json.ts  (wrapper)
+export { canonicalJson } from '@trading-backtester/sdk/contracts';
+export { quantizeContractNumber as quantize } from '@trading-backtester/sdk/contracts';
+
+// apps/backtester/src/determinism/hash.ts  (wrapper)
+export { sha256Hex, contentRef } from '@trading-backtester/sdk/contracts';
+```
+
+The `/builder` facade exports `computeInlineBundleHash`, which delegates to
+`canonicalBundleHash`. There is exactly one serialization and hash algorithm; the
+service reaches it through these wrappers and `sandbox/bundle.ts::bundleHash`
+keeps calling `contentRef` unchanged.
 
 - [ ] **Step 4: Implement manifest, bundle and preflight helpers**
 
@@ -711,28 +838,66 @@ Sort issues by `(path ?? '', code)`. Check manifest shape/kind/version, entry
 presence, every file path, selected engine and declared module kind. Do not
 import or execute source.
 
+Use only issue codes that the authoritative service validation already emits
+(see `apps/backtester/src/sandbox/bundle.ts::validateBundle`):
+`schema_invalid`, `unsupported_module_kind`, `unsupported_contract_version` and
+`bundle_entrypoint_invalid` (used for both bad file paths and a missing/absent
+entry). Do not introduce a new `bundle_path_invalid` code.
+
+The `/builder` facade exports the public name that delegates to the shared
+primitive:
+
+```ts
+// builder/index.ts
+import { canonicalBundleHash } from '../contracts';
+export function computeInlineBundleHash(bundle: ModuleBundle): ContentHash {
+  return canonicalBundleHash(bundle);
+}
+export { createModuleManifest } from './manifest';
+export { createModuleBundle } from './bundle';
+export { preflightValidateBundle } from './preflight';
+```
+
 - [ ] **Step 5: Add a service/SDK golden hash assertion**
 
 Modify `apps/backtester/test/bundle.test.ts` to build one fixture through the
-SDK and assert both the SDK helper and service bundle store use the same exact
-hash. Preserve the existing golden value instead of regenerating it silently.
+SDK and assert `computeInlineBundleHash(bundle)` equals the service registry
+hash `apps/backtester/src/sandbox/bundle.ts::bundleHash(bundle)` exactly (this is
+the registry-identity hash, not the sandbox-integrity
+`engine/sandbox/bundle-hash.ts::computeBundleHash`). Preserve the existing golden
+value instead of regenerating it silently.
+
+Because the service determinism files are now wrappers over the SDK, the
+existing frozen golden `result_hash` / fingerprint snapshots
+(`determinism.test.ts`, `momentum-guardrail.test.ts`, `overlay-golden.test.ts`,
+`overlay-sandbox-equivalence.test.ts`, …) double as the byte-parity guard for
+the moved core: they must stay green with their current values, proving the move
+changed no bytes.
 
 - [ ] **Step 6: Run focused tests and typecheck**
 
 ```bash
-pnpm vitest run packages/sdk/test/builder.test.ts apps/backtester/test/bundle.test.ts
+pnpm sdk:build
+pnpm vitest run \
+  packages/sdk/test/builder.test.ts \
+  apps/backtester/test/bundle.test.ts \
+  apps/backtester/test/determinism.test.ts \
+  apps/backtester/test/momentum-guardrail.test.ts \
+  apps/backtester/test/overlay-golden.test.ts
 pnpm typecheck
 ```
 
-Expected: PASS; existing bundle golden remains unchanged.
+Expected: PASS; existing bundle and `result_hash` goldens remain unchanged
+(byte-parity proof that the moved core is behavior-identical).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/sdk/src packages/sdk/test \
+git add packages/sdk/src packages/sdk/test packages/sdk/package.json \
   apps/backtester/src/determinism apps/backtester/src/sandbox/bundle.ts \
-  apps/backtester/test/bundle.test.ts
-git commit -m "feat(sdk): add deterministic bundle builder and canonical hashing"
+  apps/backtester/test/bundle.test.ts \
+  apps/backtester/package.json package.json pnpm-lock.yaml
+git commit -m "feat(sdk): add deterministic builder and move canonical hashing core"
 ```
 
 ---
@@ -785,10 +950,15 @@ getRunResult(runId: string): Promise<RunResultSummary>;
 getArtifactManifest(runId: string): Promise<ArtifactManifest>;
 readArtifact(runId: string, artifactId: string, opts?: ReadArtifactOptions): Promise<ArtifactPage>;
 cancelRun(runId: string): Promise<RunStatusView>;
+awaitCompletion(runId: string, opts?: AwaitCompletionOptions): Promise<RunStatusView>;
 ```
 
-Move the existing error classes and status mapping unchanged. The SDK client
-entrypoint exports the class, error classes and client option interfaces only.
+Preserve `awaitCompletion` and its `AwaitCompletionOptions` (injectable
+`sleep`/`intervalMs`/`timeoutMs`) verbatim from the existing client — it is part
+of the public surface the current `trading-lab` adapter relies on; do not drop
+it. Move the existing error classes and status mapping unchanged. The SDK client
+entrypoint exports the class, error classes and client option interfaces
+(including `AwaitCompletionOptions` and `ReadArtifactOptions`) only.
 
 - [ ] **Step 4: Run old and new client suites together**
 
@@ -844,31 +1014,59 @@ const PUBLIC_BOUNDARY_FILES = [
   'src/sandbox/bundle.ts',
 ] as const;
 
+// Public wire DTOs that MUST now come from the SDK, not the private package.
+const PUBLIC_WIRE_NAMES = [
+  'ModuleBundle', 'ModuleManifest', 'ModuleKind', 'BacktestEngine',
+  'RunSubmitRequest', 'RunJobHandle', 'RunStatus', 'RunStatusView',
+  'RunResultSummary', 'RunEvidence', 'ComparisonSummary', 'CompletionEvent',
+  'ModuleValidateRequest', 'ValidationReport', 'ValidationIssue',
+  'GatewayError', 'GatewayErrorCategory', 'CapabilityDescriptor',
+  'DatasetDescriptor', 'ContentHash', 'ArtifactReference', 'ArtifactDescriptor',
+  'ArtifactManifest', 'ArtifactPage', 'ArtifactAvailability',
+  'API_CONTRACT_VERSION', 'ARTIFACT_CONTRACT_VERSION', 'BUNDLE_CONTRACT_VERSION',
+  'SCHEMA_IDS', 'schemaAsset', 'CoreSchemaName',
+] as const;
+
 for (const rel of PUBLIC_BOUNDARY_FILES) {
   const source = readFileSync(join(APP_ROOT, rel), 'utf8');
-  expect(source).not.toContain("from '@trading/research-contracts'");
+  // Distinguish public DTOs from private engine models: reject ONLY public wire
+  // names imported from the old package; private engine/historical imports
+  // (HistoricalDatasetReader, CanonicalRow, engine profiles, StrategyContext,
+  // sandbox IPC) from '@trading/research-contracts' stay allowed.
+  for (const m of source.matchAll(/import[^;]*?from\s+'(@trading\/research-contracts[^']*)'/g)) {
+    const stmt = m[0];
+    for (const name of PUBLIC_WIRE_NAMES) {
+      expect(stmt.includes(name), `${rel} imports public wire ${name} from the private package`).toBe(false);
+    }
+  }
 }
 ```
 
-Run and expect RED because these files still import the old root package.
+Run and expect RED because these files still import public wire names from the
+old root package. The guard intentionally still allows private engine/historical
+imports from `@trading/research-contracts`.
 
-- [ ] **Step 2: Add the SDK workspace dependency**
+- [ ] **Step 2: Confirm the SDK workspace dependency and build hooks**
 
-Change `apps/backtester/package.json`:
+The `"@trading-backtester/sdk": "workspace:*"` dependency in
+`apps/backtester/package.json` and the root `sdk:build` / `pretypecheck` /
+`pretest` lifecycle hooks were introduced in Task 4 (to support the determinism
+wrappers). Verify they are present; if a clean branch starts at Task 6, add them
+now:
 
 ```json
+// apps/backtester/package.json
 "@trading-backtester/sdk": "workspace:*"
 ```
 
-Keep `@trading/research-contracts` for private historical/engine types.
-
-Because the SDK package exports compiled `dist`, update the root lifecycle
-scripts so clean workspaces build it before service consumers run:
-
 ```json
+// package.json (root)
+"sdk:build": "pnpm --filter @trading-backtester/sdk build",
 "pretypecheck": "pnpm sdk:build",
 "pretest": "pnpm sdk:build && pnpm run build:sandbox-harness-overlay"
 ```
+
+Keep `@trading/research-contracts` for private historical/engine types.
 
 - [ ] **Step 3: Migrate public boundary imports**
 
@@ -983,6 +1181,10 @@ validate the same exported pure function used by its CLI entrypoint.
 - package name/version/license mismatch;
 - missing root or subpath export targets.
 
+It must **allow** a normal registry semver dependency: `decimal.js` is the one
+declared runtime dependency and must pass (only `workspace:`/`file:`/`link:`/
+sibling-path specifiers are forbidden, not registry ranges).
+
 The CLI mode accepts a tarball path, obtains its JSON file listing with
 `tar -tzf`, reads `package/package.json`, prints every error and exits 1 when the
 array is non-empty.
@@ -1003,10 +1205,10 @@ README must document:
 
 - [ ] **Step 4: Add root scripts and ignore generated tarballs**
 
-Add:
+Add (the `sdk:build` script already exists from Task 4 — add only the pack and
+verify scripts):
 
 ```json
-"sdk:build": "pnpm --filter @trading-backtester/sdk build",
 "sdk:pack": "mkdir -p .artifacts/sdk && pnpm --filter @trading-backtester/sdk pack --pack-destination ../../.artifacts/sdk",
 "sdk:verify": "tsx scripts/verify-sdk-package.ts .artifacts/sdk/trading-backtester-sdk-0.1.0.tgz"
 ```
@@ -1035,13 +1237,28 @@ void bundle;
 ```js
 // smoke.mjs: runtime ESM coverage
 import { SDK_VERSION } from '@trading-backtester/sdk';
-import { createModuleManifest } from '@trading-backtester/sdk/builder';
+import { allSchemaAssets } from '@trading-backtester/sdk/contracts';
+import {
+  createModuleManifest,
+  createModuleBundle,
+  computeInlineBundleHash,
+} from '@trading-backtester/sdk/builder';
 import { BacktesterClient } from '@trading-backtester/sdk/client';
 import { isContentHash } from '@trading-backtester/sdk/artifacts';
 if (SDK_VERSION !== '0.1.0') process.exit(1);
 if (typeof createModuleManifest !== 'function') process.exit(1);
 if (typeof BacktesterClient !== 'function') process.exit(1);
 if (!isContentHash(`sha256:${'a'.repeat(64)}`)) process.exit(1);
+// Schema assets must resolve from the installed tarball, not the repo layout.
+if (allSchemaAssets().length !== 5) process.exit(1);
+// Build + hash a fixture bundle so decimal.js + the codec resolve at runtime.
+const manifest = createModuleManifest({ id: 'smoke', version: '1.0.0', kind: 'overlay' });
+const bundle = createModuleBundle({
+  manifest,
+  entry: 'index.js',
+  files: { 'index.js': 'export default () => ({ apply: () => null })' },
+});
+if (!isContentHash(computeInlineBundleHash(bundle))) process.exit(1);
 ```
 
 The verifier runs `pnpm install --lockfile-only`, then
@@ -1267,11 +1484,19 @@ git commit -m "docs(sdk): document public package and migration boundary"
 
 ```bash
 rg -n 'workspace:|file:\.\./|link:\.\./' packages/sdk/package.json packages/sdk/dist
-rg -n 'trading-platform|exchange credential|live order' packages/sdk/src packages/sdk/dist
+# Reject a trading-platform PACKAGE import/dependency, not the substring itself:
+rg -n "from '@trading-platform|require\(['\"]@trading-platform|\"@trading-platform" \
+  packages/sdk/src packages/sdk/dist packages/sdk/package.json
+rg -n 'exchange credential|live order' packages/sdk/src packages/sdk/dist
 ```
 
-Expected: no dependency/path leaks. Documentation-only boundary wording is
-allowed only in README and must not appear in runtime source or declarations.
+Expected: no dependency/path leaks. Note the moved `SCHEMA_IDS` and the schema
+`$id` values legitimately contain the stable identifier
+`https://trading-platform/017/...` (a parity anchor with the platform schema id,
+not a dependency); the refined check above matches only an actual
+`@trading-platform` package import/dependency, so those identifiers are allowed.
+Documentation-only boundary wording is allowed only in README and must not
+appear in runtime source or declarations.
 
 - [ ] **Step 2: Run the focused SDK suite**
 
@@ -1334,16 +1559,23 @@ delete the legacy client or open a PR without a separate request.
 | Spec requirement | Plan task |
 |---|---|
 | One package/four subpaths | Task 1 |
+| SDK tests/scripts covered by full gates (vitest/tsconfig globs) | Task 1 |
+| `ContentHash` single source in `internal/shared-types` | Tasks 1 and 2 |
 | Canonical public DTO source | Tasks 2 and 6 |
-| Momentum + lifecycle authoring ABI | Task 3 |
+| Version value-parity (`API_CONTRACT_VERSION` ≡ `CONTRACT_VERSION`) | Task 3 |
+| Momentum + lifecycle authoring ABI (from `research/context.ts`, no engine-only) | Task 3 |
 | Packaged schemas drive authoritative validation | Tasks 3 and 6 |
-| Deterministic builder/hash/preflight | Task 4 |
-| Typed HTTP client | Task 5 |
+| One determinism core + `decimal.js` runtime dependency (option a) | Task 4 |
+| Deterministic builder/hash/preflight; `computeInlineBundleHash` vs sandbox-integrity hash | Task 4 |
+| Authoritative-compatible preflight codes (no `bundle_path_invalid`) | Task 4 |
+| Typed HTTP client incl. `awaitCompletion` | Task 5 |
 | Artifact facade and bounded DTO | Task 2 |
 | Service consumes SDK contracts | Task 6 |
+| Boundary guard distinguishes public SDK DTOs from private engine models | Task 6 |
 | Standalone package/no workspace leaks | Task 7 |
+| Clean-consumer resolves `allSchemaAssets()` from the tarball | Task 7 |
 | Apache-2.0 | Task 7 |
 | GitHub Release assets/checksum/manifest | Task 8 |
-| No wrapper; frozen client until cutover | Tasks 6 and 9 |
+| No public client wrapper; frozen client until cutover | Tasks 6 and 9 |
 | Research-only/sandbox unchanged | Tasks 9 and 10 |
 | Full verification | Task 10 |

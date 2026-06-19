@@ -107,6 +107,20 @@ sibling checkout, registry token or dependency on `trading-platform`.
    URL; no npm registry is required.
 9. **Apache-2.0.** The public SDK carries an explicit permissive license with a
    patent grant.
+10. **One determinism core (option a).** The canonical-JSON serializer, content
+    hashing and contract-number quantization move into the SDK as the single
+    source of truth and are exported from `sdk/contracts` as protocol
+    primitives. The service does not keep a second implementation. The existing
+    `apps/backtester/src/determinism/{canonical-json,hash}.ts` files become thin
+    re-export wrappers over the SDK primitives, so current service and test
+    imports stay valid while the implementation is no longer duplicated.
+11. **`decimal.js` is an explicit SDK runtime dependency.** The quantizer depends
+    on `decimal.js`; the SDK declares it in `dependencies`. The package does not
+    rely on implicit bundler inlining for correctness or for the golden-hash
+    parity guarantee.
+12. **`ContentHash` lives in `internal/shared-types.ts`.** It is re-exported by
+    both `contracts` and `artifacts` so there is exactly one `ContentHash`
+    definition and no `contracts → artifacts` import cycle.
 
 ## 5. Package architecture
 
@@ -134,9 +148,22 @@ packages/sdk/
         └── index.ts
 ```
 
-`src/internal` is package-private and is not listed in `exports`. It may hold
+`src/internal` is package-private and is not listed in `exports`. It holds
 foundational definitions used by several public facades so that the package has
-one definition without introducing circular subpath dependencies.
+one definition without introducing circular subpath dependencies:
+
+- `internal/shared-types.ts` owns `ContentHash`; `contracts` and `artifacts`
+  both re-export it, so neither facade imports the other for it.
+- `internal/canonical-json.ts` owns the deterministic serializer and the
+  contract-number quantizer (`canonicalJson`, `quantizeContractNumber`), which
+  depend on `decimal.js`.
+- `internal/content-hash.ts` owns `sha256Hex`, `contentRef` and
+  `canonicalBundleHash`.
+
+These internal modules are not exported as subpaths, but the protocol
+primitives they define are re-exported through `sdk/contracts` (see §7.2) as the
+single source of truth shared by builder, service and tests. `decimal.js` is a
+declared runtime dependency of the SDK, not an implicitly bundled import.
 
 The dependency direction is:
 
@@ -174,7 +201,10 @@ The following become canonical under `@trading-backtester/sdk/contracts`:
 - result summary, metric comparison and evidence references;
 - capability and dataset descriptors exposed by the backtester HTTP API;
 - completion-event wire DTO;
-- stable gateway error categories.
+- stable gateway error categories;
+- the canonical determinism primitives (`canonicalJson`,
+  `quantizeContractNumber`, `sha256Hex`, `contentRef`, `canonicalBundleHash`)
+  shared by builder, service and tests.
 
 The SDK contract is the external wire shape. Internal engine models may be
 richer, but conversion happens inside the service and is not leaked through the
@@ -226,8 +256,24 @@ import type {
 ```
 
 `contracts` also exports version constants, schema identifiers and the canonical
-bundle codec/hash primitive used by both builder and service. It does not expose
-filesystem paths or service implementation objects.
+determinism primitives used by builder, service and tests:
+
+```ts
+import {
+  canonicalJson,
+  contentRef,
+  sha256Hex,
+  quantizeContractNumber,
+  canonicalBundleHash,
+} from '@trading-backtester/sdk/contracts';
+```
+
+These are the single source of truth. The service's
+`apps/backtester/src/determinism/{canonical-json,hash}.ts` become thin
+re-export wrappers over them (the wrapper may re-export `quantizeContractNumber`
+under the service's historical name `quantize`), so existing service and golden
+test imports keep working without a second implementation. `contracts` does not
+expose filesystem paths or service implementation objects.
 
 ### 7.3 Builder
 
@@ -236,12 +282,21 @@ The public builder API is:
 ```ts
 createModuleManifest(input): ModuleManifest
 createModuleBundle({ manifest, entry, files }): ModuleBundle
-computeBundleHash(bundle): ContentHash
+computeInlineBundleHash(bundle): ContentHash
 preflightValidateBundle(bundle, { engine }): ValidationReport
 ```
 
 These names and responsibilities are part of the public design. The exact input
 field types are derived from the canonical contract during implementation.
+
+`computeInlineBundleHash` corresponds to the service's registry-identity hash
+`apps/backtester/src/sandbox/bundle.ts::bundleHash` (`contentRef(bundle)` over
+the full inline bundle) and delegates to the shared `canonicalBundleHash`
+primitive. It is intentionally distinct from the service's sandbox-integrity
+hash `apps/backtester/src/engine/sandbox/bundle-hash.ts::computeBundleHash`,
+which reads a materialized bundle directory and hashes
+`{ manifestSha256, files }`. That sandbox-integrity function keeps its name and
+is not part of the SDK surface.
 
 The first release describes both executable ABIs already implemented by the
 service:
@@ -258,9 +313,13 @@ engine: overlay
   decision hook: (StrategyContext) -> decision | decision[] | null
 ```
 
-The SDK exports TypeScript authoring types for these shapes. The selected
-`RunSubmitRequest.engine` determines which ABI authoritative validation and the
-sandbox use. Preflight receives the same engine explicitly and checks manifest,
+The SDK exports TypeScript authoring types for these shapes. They are derived
+explicitly from `packages/research-contracts/src/research/context.ts`
+(`StrategyContext`, the bar/point-in-time shapes, and the closed decision
+vocabularies) and must not pull in engine-only types — portfolio, execution,
+indicator, market-tape, storage rows or sandbox IPC models stay private. The
+selected `RunSubmitRequest.engine` determines which ABI authoritative validation
+and the sandbox use. Preflight receives the same engine explicitly and checks manifest,
 layout and declared ABI compatibility. It does not import the entrypoint and
 therefore cannot claim that a required runtime export really exists.
 
@@ -273,7 +332,11 @@ The behavioral contract is:
 - identical semantic input produces the same canonical hash;
 - validation issues are sorted by stable `(path, code)` ordering;
 - preflight performs structural, version, path and declared-ABI checks only;
-- preflight never imports or executes submitted source.
+- preflight never imports or executes submitted source;
+- preflight issue codes are a subset compatible with authoritative service
+  validation (e.g. `bundle_entrypoint_invalid`, `unsupported_contract_version`,
+  `unsupported_module_kind`); it does not invent new codes such as
+  `bundle_path_invalid`.
 
 The builder does not create platform contract-017 manifests, call an LLM,
 generate trading rules, read a bundle directory, contact a service or run a
@@ -293,11 +356,14 @@ await client.getRunResult(runId);
 await client.getArtifactManifest(runId);
 await client.readArtifact(runId, artifactId, options);
 await client.cancelRun(runId);
+await client.awaitCompletion(runId, options);
 ```
 
 The client owns HTTP construction, bearer auth, JSON parsing and typed error
 mapping. It does not redeclare contract or artifact types. `fetchImpl` remains
-injectable and global `fetch` remains the default.
+injectable and global `fetch` remains the default. `awaitCompletion` (poll until
+terminal, with injectable `sleep`/timeout) is preserved from the existing client
+so the current `trading-lab` adapter keeps its polling helper.
 
 ### 7.5 Artifacts
 
@@ -367,6 +433,12 @@ The tarball must not contain:
 Multiple tsup entrypoints produce the four subpath exports. Schema assets are
 copied or generated as part of the package build and must resolve from an
 installed tarball, not from the repository layout.
+
+The SDK declares `decimal.js` as its sole runtime `dependency` (it backs the
+canonical-number quantizer). A clean consumer installs it transitively from the
+public registry. The package does not rely on implicit tsup bundling of
+`decimal.js`; package inspection allows this one declared registry dependency
+while still rejecting any `workspace:`, `file:` or `link:` specifier.
 
 ## 10. Distribution
 
@@ -471,8 +543,17 @@ The platform builder is removed only after the separate public
 ### Contract tests
 
 - service handlers accept SDK requests and return SDK responses;
-- service and SDK compute the same golden bundle hash;
+- service and SDK compute the same golden inline bundle hash
+  (`computeInlineBundleHash` ≡ `sandbox/bundle.ts::bundleHash`);
+- the service determinism wrappers and the SDK primitives produce byte-identical
+  output (existing golden `result_hash` / fingerprint snapshots stay frozen);
 - authoritative validation consumes packaged schemas;
+- the SDK `API_CONTRACT_VERSION` and the private package's `CONTRACT_VERSION`
+  are asserted value-equal (`017.2`) while the two coexist;
+- the boundary guard distinguishes public SDK DTOs from private engine models:
+  it forbids public wire imports from the old package on boundary files while
+  still allowing `HistoricalDatasetReader`, canonical rows, engine profiles and
+  sandbox IPC types to be imported from the private package;
 - all lifecycle and terminal statuses are exhaustively covered;
 - artifact result references match the artifact facade.
 
@@ -490,8 +571,10 @@ A temporary consumer outside the pnpm workspace must:
 1. install the freshly packed `.tgz` with a frozen lock;
 2. typecheck imports from root and all four subpaths;
 3. execute ESM imports;
-4. build and hash a fixture bundle;
-5. use the client against the fixture HTTP app or a controlled test server.
+4. build and hash a fixture bundle (`computeInlineBundleHash`);
+5. call `allSchemaAssets()` and assert all five 017 schema assets resolve from
+   the installed tarball (not the repository layout);
+6. use the client against the fixture HTTP app or a controlled test server.
 
 Package inspection fails on workspace/file links, forbidden files, platform
 implementation references or missing schema assets.
@@ -526,9 +609,13 @@ The SDK initiative is complete when:
 
 1. `@trading-backtester/sdk@0.1.0` exposes all four documented subpaths;
 2. the packed tarball installs and runs outside the workspace;
-3. service, builder and client share one canonical public contract source;
+3. service, builder and client share one canonical public contract source, and
+   one determinism core (canonical JSON, quantizer, content hashing) with the
+   service consuming it via thin re-export wrappers and `decimal.js` declared as
+   an SDK runtime dependency;
 4. builder emits the exact inline executable bundle accepted by the service;
-5. SDK and service produce identical golden bundle hashes;
+5. SDK and service produce identical golden inline bundle hashes, and existing
+   frozen `result_hash`/fingerprint goldens stay byte-identical;
 6. the package has no sibling/workspace/platform implementation dependency;
 7. GitHub Release assets include `.tgz`, checksum and source manifest;
 8. `trading-lab` installs without `../trading-backtester` after its cutover;
