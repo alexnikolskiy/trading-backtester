@@ -26,6 +26,9 @@ importers:
 
   apps/backtester:
     dependencies:
+      '@trading-backtester/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@trading/research-contracts':
         specifier: workspace:*
         version: link:../../packages/research-contracts
