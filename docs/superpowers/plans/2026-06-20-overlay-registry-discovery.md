@@ -29,14 +29,19 @@ packages/sdk/src/client/client.ts                        # discoverRegistry()
 packages/sdk/test/registry-contract.test.ts              # NEW: pins the DTO shape
 apps/backtester/src/engine/registry-definition.ts        # NEW: TRUSTED_REGISTRY_DEFINITION + validation
 apps/backtester/src/engine/trusted-registry.ts           # refactor to build from the definition
-apps/backtester/src/jobs/fingerprint.ts                  # add engine/overlayRefs/risk/exec/robustness
+apps/backtester/src/jobs/fingerprint.ts                  # complete fn + verbatim legacyRequestFingerprint
+apps/backtester/src/jobs/submit.ts                       # conflict guard accepts legacy hash
 apps/backtester/src/api/registry-route.ts                # NEW: GET /v1/registry handler
 apps/backtester/src/api/server.ts                        # register the route
 apps/backtester/test/registry-endpoint.test.ts           # NEW
 apps/backtester/test/trusted-registry-parity.test.ts     # NEW
 apps/backtester/test/registry-definition.test.ts         # NEW
-apps/backtester/test/fingerprint.test.ts                 # extend (regression)
+apps/backtester/test/fingerprint.test.ts                 # extend (field-completeness regression)
+apps/backtester/test/idempotency.test.ts                 # extend (pre-deploy replay compat)
 ```
+
+> **Cross-repo (trading-lab, Phase 3) files** are listed in Task 9 (a separate worktree under
+> `trading-lab/.worktrees/`); they are not in this map, which covers the backtester repo only.
 
 ---
 
@@ -195,27 +200,59 @@ git commit -m "feat(sdk): add registry discovery contract (0.2.0)"
 
 **Files:**
 - Modify: `packages/sdk/src/client/client.ts`
+- Modify: `packages/sdk/test/client.test.ts` (the existing fake-fetch client suite)
 
-- [ ] **Step 1: Add the method**
+- [ ] **Step 1: Write the failing fake-fetch test (RED)**
 
-Read `packages/sdk/src/client/client.ts`. It has a private `request<T>(method, path, body?)` helper and methods like `getCapabilities(): Promise<CapabilityDescriptor> { return this.request('GET', '/v1/capabilities'); }`. Add an import of `RegistryDescriptor` from `../contracts/index` and a method:
+First read `packages/sdk/test/client.test.ts` to copy its exact client-construction + fake-`fetch` injection pattern (how `getCapabilities`/`listDatasets` are tested — the client takes an injectable `fetch`). Add a case that asserts `discoverRegistry()` issues `GET /v1/registry` with bearer auth and returns the parsed `RegistryDescriptor`:
+```ts
+it('discoverRegistry() GETs /v1/registry with bearer auth and returns the descriptor', async () => {
+  const descriptor /*: RegistryDescriptor */ = {
+    contractVersion: '017.2', baselines: [{ id: 'short_after_pump', version: '0.1.0' }],
+    overlays: [], riskProfiles: [], execProfiles: [],
+    metricCatalogs: { momentum: [], overlay: ['pnl'] },
+    overlayRunPresets: [{ id: 'default-overlay', baselineRef: { id: 'short_after_pump', version: '0.1.0' },
+      riskProfileRef: { id: 'default_risk', version: '1.0.0' }, executionProfileRef: { id: 'default_exec', version: '1.0.0' },
+      metrics: ['pnl'] }],
+  };
+  const calls: Array<{ url: string; method?: string; auth?: string }> = [];
+  const fakeFetch = async (url: string, init?: { method?: string; headers?: Record<string, string> }) => {
+    calls.push({ url, method: init?.method, auth: init?.headers?.['authorization'] ?? init?.headers?.['Authorization'] });
+    return { ok: true, status: 200, json: async () => descriptor } as Response;
+  };
+  // Construct the client EXACTLY as the sibling cases do (baseUrl + token + injected fetch).
+  const client = makeClient({ fetch: fakeFetch as typeof fetch });
+  const got = await client.discoverRegistry();
+  expect(got).toEqual(descriptor);
+  expect(calls.at(-1)?.url).toMatch(/\/v1\/registry$/);
+  expect(calls.at(-1)?.method ?? 'GET').toBe('GET');
+  expect(calls.at(-1)?.auth).toMatch(/^Bearer /);
+});
+```
+(Replace `makeClient(...)` with the suite's actual constructor call. If the suite stubs the global `fetch` instead of injecting it, follow that mechanism instead — match the file, don't invent a new one.)
+
+Run `pnpm vitest run packages/sdk/test/client.test.ts` → RED (`discoverRegistry` is not a function).
+
+- [ ] **Step 2: Add the method**
+
+In `packages/sdk/src/client/client.ts` add an import of `RegistryDescriptor` from `../contracts/index` and a method that mirrors `getCapabilities`:
 ```ts
 discoverRegistry(): Promise<RegistryDescriptor> {
   return this.request('GET', '/v1/registry');
 }
 ```
-(Match the exact `request` signature + path style already used by `getCapabilities`/`listDatasets`.)
 
-- [ ] **Step 2: Build + typecheck**
+- [ ] **Step 3: GREEN + build + typecheck**
 ```bash
+pnpm vitest run packages/sdk/test/client.test.ts
 pnpm --filter @trading-backtester/sdk build
 pnpm typecheck
 ```
-Expected: exit 0.
+Expected: PASS, exit 0.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 ```bash
-git add packages/sdk/src/client/client.ts
+git add packages/sdk/src/client/client.ts packages/sdk/test/client.test.ts
 git commit -m "feat(sdk): add discoverRegistry() client method"
 ```
 
@@ -279,6 +316,12 @@ import { METRIC_CATALOG as OVERLAY_METRIC_CATALOG } from '@trading/research-cont
 import { DEFAULT_RISK, DEFAULT_EXEC } from './profiles.js';
 import { shortAfterPump } from './examples/short-after-pump.strategy.js';
 import { earlyExitShortAfterPump } from './examples/early-exit-short-after-pump.overlay.js';
+import type {
+  StrategyModule,
+  HypothesisOverlayModule,
+  RiskProfile,
+  ExecutionProfile,
+} from '@trading/research-contracts/research';
 
 export interface OverlayRunPresetDef {
   readonly id: string;
@@ -289,11 +332,13 @@ export interface OverlayRunPresetDef {
   readonly metrics: readonly string[];
 }
 
+// Use the GENERAL contract types (matching `RegistryInput` in engine/registry.ts) so the definition
+// accepts any registered module/profile, not just the current example concretes.
 export interface RegistryDefinition {
-  readonly strategies: readonly (typeof shortAfterPump)[];
-  readonly overlays: readonly (typeof earlyExitShortAfterPump)[];
-  readonly riskProfiles: readonly (typeof DEFAULT_RISK)[];
-  readonly executionProfiles: readonly (typeof DEFAULT_EXEC)[];
+  readonly strategies: readonly StrategyModule[];
+  readonly overlays: readonly HypothesisOverlayModule[];
+  readonly riskProfiles: readonly RiskProfile[];
+  readonly executionProfiles: readonly ExecutionProfile[];
   readonly momentumMetricCatalog: readonly string[];
   readonly overlayMetricCatalog: readonly string[];
   readonly overlayRunPresets: readonly OverlayRunPresetDef[];
@@ -313,7 +358,9 @@ export const TRUSTED_REGISTRY_DEFINITION: RegistryDefinition = {
       baselineRef: { id: shortAfterPump.manifest.id, version: shortAfterPump.manifest.version },
       riskProfileRef: { id: DEFAULT_RISK.id, version: DEFAULT_RISK.version },
       executionProfileRef: { id: DEFAULT_EXEC.id, version: DEFAULT_EXEC.version },
-      metrics: ['pnl', 'max_drawdown', 'win_rate', 'sharpe'].filter((m) => OVERLAY_METRIC_CATALOG.includes(m)),
+      // EXACT array — no `.filter()`. A metric not in the overlay catalog is a definition bug and
+      // MUST make `validateRegistryDefinition` throw (fail-fast), not be silently dropped.
+      metrics: ['pnl', 'max_drawdown', 'win_rate', 'sharpe'],
     },
   ],
 };
@@ -339,7 +386,7 @@ export function validateRegistryDefinition(def: RegistryDefinition): void {
 
 validateRegistryDefinition(TRUSTED_REGISTRY_DEFINITION);
 ```
-(If `DEFAULT_RISK`/`DEFAULT_EXEC`/`shortAfterPump`/`earlyExitShortAfterPump` shapes differ — e.g. the strategy object exposes `manifest.id` — adjust the `.manifest`/`.id` access to match; check the actual files. Do NOT change those modules.)
+Confirmed shapes (do NOT change these modules): `StrategyModule`/`HypothesisOverlayModule` carry `.manifest.id`/`.manifest.version`; `RiskProfile`/`ExecutionProfile` carry `.id`/`.version` directly. `DEFAULT_RISK = { id: 'default_risk', version: '1.0.0', … }`, `DEFAULT_EXEC = { id: 'default_exec', version: '1.0.0', … }`, `shortAfterPump.manifest = { id: 'short_after_pump', version: '0.1.0', … }`, `earlyExitShortAfterPump.manifest = { id: 'early_exit_short_after_pump', version: '0.1.0', … }`. The `validateRegistryDefinition(TRUSTED_REGISTRY_DEFINITION)` call at module load makes any drift fail at import time.
 
 - [ ] **Step 3: Refactor `buildTrustedRegistry` to use the definition**
 
@@ -373,13 +420,26 @@ git commit -m "refactor(engine): canonical TRUSTED_REGISTRY_DEFINITION + fail-fa
 
 ---
 
-### Task 5: Fix `requestFingerprint` completeness
+### Task 5: Fix `requestFingerprint` completeness (with idempotency compatibility)
+
+> **Compatibility context (read before implementing):** `requestFingerprint` is NOT the idempotency
+> key — the dedup key is `resumeToken` (via `JobStore.insertOrGet`). The fingerprint is used ONLY in
+> `submitRun`'s conflict guard (`submit.ts`): when a `resumeToken` resolves to an existing job and
+> `job.requestFingerprint !== fingerprint`, it throws `409 resume_token_conflict`. Changing the
+> fingerprint algorithm would therefore make a **legitimate idempotent replay of a pre-deploy job**
+> (same request, same `resumeToken`, submitted again after this deploy) compute a different hash and
+> get a FALSE `409`. Fix: keep a verbatim `legacyRequestFingerprint` (the current 10-field algorithm)
+> and accept EITHER hash in the conflict guard. New jobs store the new hash; pre-deploy jobs still
+> match via the legacy hash. A genuinely different request still mismatches both → real 409. This
+> changes no `result_hash` (the fingerprint is not part of the hashed `RunOutcome`).
 
 **Files:**
-- Modify: `apps/backtester/src/jobs/fingerprint.ts`
-- Modify: `apps/backtester/test/fingerprint.test.ts`
+- Modify: `apps/backtester/src/jobs/fingerprint.ts` (new complete fn + verbatim `legacyRequestFingerprint`)
+- Modify: `apps/backtester/src/jobs/submit.ts` (conflict guard accepts legacy hash)
+- Modify: `apps/backtester/test/fingerprint.test.ts` (field-completeness regression)
+- Modify: `apps/backtester/test/idempotency.test.ts` (pre-deploy replay compatibility)
 
-- [ ] **Step 1: Write failing regression tests**
+- [ ] **Step 1: Write failing field-completeness regression tests**
 
 In `apps/backtester/test/fingerprint.test.ts` (read it first; it already tests `requestFingerprint`), add cases asserting DISTINCT fingerprints for requests differing ONLY in each newly-included field:
 ```ts
@@ -405,10 +465,39 @@ it('distinguishes risk/exec/robustness', () => {
 ```
 Run → RED (current fingerprint omits these → equal).
 
-- [ ] **Step 2: Add the fields to the normalized object**
+- [ ] **Step 2: Extend `requestFingerprint` + keep `legacyRequestFingerprint` verbatim**
 
-In `apps/backtester/src/jobs/fingerprint.ts`, extend `normalized` (keep the existing fields + their order, append the new ones):
+Rewrite `apps/backtester/src/jobs/fingerprint.ts`. `legacyRequestFingerprint` is the CURRENT 10-field
+body copied EXACTLY (do not "improve" it — it must reproduce pre-deploy stored hashes byte-for-byte):
 ```ts
+import type { RunSubmitRequest } from '@trading-backtester/sdk/contracts';
+import { canonicalJson } from '../determinism/canonical-json';
+import { sha256Hex } from '../determinism/hash';
+import { bundleHash } from '../sandbox/bundle';
+
+/**
+ * Pre-2026-06 fingerprint (run-affecting fields BEFORE engine/overlay fields were added). Retained ONLY
+ * so the conflict guard can still match `resumeToken` replays of jobs submitted before this deploy.
+ * Do not extend — its output must stay byte-stable for already-stored rows.
+ */
+export function legacyRequestFingerprint(req: RunSubmitRequest): string {
+  const normalized = {
+    datasetRef: req.datasetRef,
+    moduleRef: req.moduleRef,
+    moduleBundle: req.moduleBundle ? bundleHash(req.moduleBundle) : null,
+    symbols: req.symbols,
+    timeframe: req.timeframe,
+    period: req.period,
+    params: req.params ?? null,
+    seed: req.seed,
+    mode: req.mode,
+    metrics: req.metrics ?? [],
+  };
+  return sha256Hex(canonicalJson(normalized));
+}
+
+/** Current fingerprint: all run-affecting fields, including the overlay-engine inputs. */
+export function requestFingerprint(req: RunSubmitRequest): string {
   const normalized = {
     datasetRef: req.datasetRef,
     moduleRef: req.moduleRef,
@@ -427,18 +516,67 @@ In `apps/backtester/src/jobs/fingerprint.ts`, extend `normalized` (keep the exis
     executionProfileRef: req.executionProfileRef ?? null,
     robustnessChecks: req.robustnessChecks ?? [],
   };
+  return sha256Hex(canonicalJson(normalized));
+}
 ```
 
-- [ ] **Step 3: GREEN + confirm result goldens unaffected**
+- [ ] **Step 3: GREEN on field-completeness + commit nothing yet**
+```bash
+pnpm vitest run apps/backtester/test/fingerprint.test.ts
+```
+Expected: the Step-1 regression cases PASS.
+
+- [ ] **Step 4: Write the failing pre-deploy replay test (RED)**
+
+In `apps/backtester/test/idempotency.test.ts` (read it first to reuse its in-memory-store `deps` builder),
+add a case that simulates a job stored BEFORE the deploy (its `requestFingerprint` is the legacy hash),
+then resubmits the same body+`resumeToken` and asserts NO conflict:
+```ts
+import { legacyRequestFingerprint, requestFingerprint } from '../src/jobs/fingerprint';
+
+it('replays a pre-deploy job (legacy fingerprint) without a resume_token_conflict', async () => {
+  const deps = makeDeps(); // mirror the existing idempotency deps builder (in-memory store + clock + uid)
+  const body = { /* a valid overlay RunSubmitRequest */ ...overlayBody, resumeToken: 'rt-legacy-1' } as RunSubmitRequest;
+  // Seed the store as if submitted before the deploy: stored hash = legacy algorithm.
+  await deps.store.insertOrGet({
+    jobId: 'run-legacy-1', runId: 'run-legacy-1', resumeToken: 'rt-legacy-1',
+    requestFingerprint: legacyRequestFingerprint(body),
+    request: { ...body, runId: 'run-legacy-1', metrics: body.metrics ?? [] },
+    effectiveSeed: body.seed, datasetRef: body.datasetRef,
+    queueDeadlineMs: 0, runTimeoutMs: 0, acceptedAtMs: 0,
+  } as any);
+  expect(legacyRequestFingerprint(body)).not.toBe(requestFingerprint(body)); // proves the algorithm changed
+  const outcome = await submitRun(deps, body); // must NOT throw 409
+  expect(outcome.created).toBe(false);
+});
+```
+Run → RED (current guard compares only the new hash → throws `resume_token_conflict`).
+
+- [ ] **Step 5: Make the conflict guard accept the legacy hash**
+
+In `apps/backtester/src/jobs/submit.ts`, import `legacyRequestFingerprint` alongside `requestFingerprint`
+and widen the guard:
+```ts
+  const { job, created } = await deps.store.insertOrGet(newJob);
+  if (!created) {
+    if (job.requestFingerprint !== fingerprint && job.requestFingerprint !== legacyRequestFingerprint(body)) {
+      throw new SubmitError(409, 'resume_token_conflict', 'resume token reused with a different request');
+    }
+    return { handle: toHandle(job, true), created: false };
+  }
+```
+(New jobs are still stored with the NEW `fingerprint` from `requestFingerprint(body)` — only the guard is widened.)
+
+- [ ] **Step 6: GREEN + confirm result goldens unaffected**
 ```bash
 pnpm vitest run apps/backtester/test/fingerprint.test.ts apps/backtester/test/idempotency.test.ts apps/backtester/test/determinism.test.ts
 ```
-Expected: fingerprint regression PASS; `result_hash` goldens UNCHANGED. If an idempotency test pins a LITERAL fingerprint value, update that literal (the fingerprint key changed by design); do NOT touch any `result_hash` golden.
+Expected: all PASS; `result_hash` goldens UNCHANGED. If an idempotency test pins a LITERAL fingerprint value, update that literal (the fingerprint key changed by design); do NOT touch any `result_hash` golden.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 ```bash
-git add apps/backtester/src/jobs/fingerprint.ts apps/backtester/test/fingerprint.test.ts apps/backtester/test/idempotency.test.ts
-git commit -m "fix(jobs): include engine/overlayRefs/risk/exec/robustness in request fingerprint"
+git add apps/backtester/src/jobs/fingerprint.ts apps/backtester/src/jobs/submit.ts apps/backtester/test/fingerprint.test.ts apps/backtester/test/idempotency.test.ts
+git commit -m "fix(jobs): complete request fingerprint; keep legacy hash for idempotent replay compat"
 ```
 
 ---
@@ -551,7 +689,19 @@ The `.github/workflows/sdk-release.yml` already takes a `version` input and chec
 
 ---
 
-### Task 9: trading-lab — port `target` migration + adapters (Phase 3)
+### Task 9: trading-lab — discriminated `target` + preset-driven `submitOverlayRun` + all adapters (Phase 3)
+
+> **Single coherent task — committed ONCE, green.** Migrating the port's `SubmitOverlayRunOptions`
+> breaks the typecheck of every `ResearchPlatformPort` implementor and every caller simultaneously.
+> Do NOT commit a half-migrated tree (no "throws not implemented" stubs). Land the port change, all
+> three adapters, and all call sites/tests in one working commit.
+>
+> **Per-adapter `target` support (deliberate):**
+> - **HTTP (backtester)** — supports `registry_preset` ONLY. The backtester needs a COMPLETE request
+>   (risk/exec/metrics), which only a preset supplies; a bare `baseline_ref` carries none of those, so
+>   the HTTP adapter REJECTS `baseline_ref` with a clear validation error.
+> - **MCP (platform)** — supports `baseline_ref` ONLY (its existing behavior); REJECTS `registry_preset`.
+> - **Mock** — supports BOTH (its result is synthetic, independent of selection).
 
 **WORKTREE:** create a NEW worktree for the lab work. From the shared lab checkout's git (do NOT switch its branch):
 ```bash
@@ -563,50 +713,35 @@ cd .worktrees/feat-overlay-presets && pnpm install
 
 **Files (in the worktree):**
 - Modify: `src/ports/research-platform.port.ts` (`SubmitOverlayRunOptions`)
-- Modify: `src/adapters/platform/http-backtester.adapter.ts`
+- Modify: `src/adapters/platform/http-backtester.adapter.ts` (+ its `BacktesterClientLike`)
 - Modify: `src/adapters/platform/mock-research-platform.adapter.ts`
 - Modify: `src/adapters/platform/mcp-research-platform.adapter.ts` (and any other `ResearchPlatformPort` impl)
+- Modify: every call site + test surfaced in Step 1
 
-- [ ] **Step 1: Migrate the port options to a discriminated `target`**
+- [ ] **Step 1: Enumerate ALL call sites and tests before changing the port**
 
-In `src/ports/research-platform.port.ts`, replace the required `baselineModuleRef: Ref` on `SubmitOverlayRunOptions` with:
+```bash
+grep -rn 'submitOverlayRun\|baselineModuleRef\|SubmitOverlayRunOptions' src test 2>/dev/null
+```
+Write the resulting list into the task notes — every production caller AND every test that constructs
+`SubmitOverlayRunOptions` or calls `submitOverlayRun` must be migrated in this task. Do not proceed
+until the list is complete (the port change will not typecheck until all of them are updated).
+
+- [ ] **Step 2: Migrate the port options to a discriminated `target`**
+
+In `src/ports/research-platform.port.ts`, replace the required `baselineModuleRef: Ref` on `SubmitOverlayRunOptions` with (keep the other option fields):
 ```ts
 target:
   | { kind: 'registry_preset'; presetId?: string }
   | { kind: 'baseline_ref'; moduleRef: Ref };
 ```
-(Keep the other option fields.) `pnpm typecheck` now RED at every implementer — that drives Steps 2–4.
+`pnpm typecheck` is now RED across the implementors + call sites — that drives Steps 3–6.
 
-- [ ] **Step 2: HTTP adapter — preset-driven (see Task 10).** (Stub a `target` switch that throws "not implemented" so the file typechecks; Task 10 fills it.)
+- [ ] **Step 3: HTTP adapter — discovery + preset-driven submission (`registry_preset` only)**
 
-- [ ] **Step 3: Mock adapter — accept both kinds**
-
-In `mock-research-platform.adapter.ts`, the synthetic result is independent of selection — read `target` and proceed deterministically for either `kind` (no network). Ensure it typechecks and its existing tests pass.
-
-- [ ] **Step 4: MCP adapter — reject `registry_preset`**
-
-In `mcp-research-platform.adapter.ts`, map `baseline_ref` to its existing behavior; for `registry_preset` throw a clear error: `presets are only supported on the backtester integration`.
-
-- [ ] **Step 5: Commit**
-```bash
-git add src/ports/research-platform.port.ts src/adapters/platform
-git commit -m "refactor(platform): discriminated overlay-run target (preset | baseline_ref)"
-```
-
----
-
-### Task 10: trading-lab — preset-driven `submitOverlayRun` + discovery
-
-**Files (worktree):**
-- Modify: `src/adapters/platform/http-backtester.adapter.ts`
-- Modify: `src/adapters/platform/select-research-platform.ts` (BacktesterClientLike gains `discoverRegistry`)
-- Modify: `src/adapters/platform/cross-repo-e2e.integration.test.ts`
-
-- [ ] **Step 1: Extend the injectable client interface**
-
-In `http-backtester.adapter.ts`, add `discoverRegistry(): Promise<RegistryDescriptor>` to `BacktesterClientLike` (import `RegistryDescriptor`/`OverlayRunPreset`/`Ref` from `@trading-backtester/sdk/contracts`). Add a memoized private `registry()` that calls `this.client.discoverRegistry()` once.
-
-- [ ] **Step 2: Implement the `target` resolution in `submitOverlayRun`**
+In `http-backtester.adapter.ts`: add `discoverRegistry(): Promise<RegistryDescriptor>` to `BacktesterClientLike`
+(import `RegistryDescriptor`/`OverlayRunPreset`/`Ref` from `@trading-backtester/sdk/contracts`); add a
+memoized private `registry()` that calls `this.client.discoverRegistry()` once; add `resolvePreset`:
 ```ts
 private async resolvePreset(presetId?: string): Promise<OverlayRunPreset> {
   const presets = (await this.registry()).overlayRunPresets;
@@ -619,31 +754,45 @@ private async resolvePreset(presetId?: string): Promise<OverlayRunPreset> {
   throw new GatewayRunError({ category: 'validation_error', code: 'ambiguous_preset', message: `presetId required: ${presets.map((p) => p.id).join(', ')}` });
 }
 ```
-In `submitOverlayRun(bundle, opts)`, build the request from `opts.target`:
-- `registry_preset` → `const preset = await this.resolvePreset(opts.target.presetId)`; `moduleRef = preset.baselineRef`, `riskProfileRef = preset.riskProfileRef`, `executionProfileRef = preset.executionProfileRef`, `metrics = [...preset.metrics]`.
-- `baseline_ref` → `moduleRef = opts.target.moduleRef` (risk/exec/metrics from a configured preset or explicit opts — for the e2e, use a preset).
-- Always: `overlayRefs = [{ id: btBundle.manifest.id, version: btBundle.manifest.version }]` where `btBundle = toBacktesterBundle(bundle)`.
+(Use the adapter's existing thrown error type — `GatewayRunError` or whatever `submitOverlayRun` already throws.)
+In `submitOverlayRun(bundle, opts)`, switch on `opts.target.kind`:
+- `'baseline_ref'` → **reject**: `throw new GatewayRunError({ category: 'validation_error', code: 'unsupported_target', message: 'the backtester integration requires a registry_preset target (baseline_ref is not supported)' })`.
+- `'registry_preset'` → `const preset = await this.resolvePreset(opts.target.presetId)`; then build the request with `moduleRef = preset.baselineRef`, `riskProfileRef = preset.riskProfileRef`, `executionProfileRef = preset.executionProfileRef`, `metrics = [...preset.metrics]`, and `overlayRefs = [{ id: btBundle.manifest.id, version: btBundle.manifest.version }]` where `btBundle = toBacktesterBundle(bundle)`.
 
-- [ ] **Step 3: Update the cross-repo e2e to use a preset**
+- [ ] **Step 4: Mock adapter — accept BOTH kinds**
 
-In `cross-repo-e2e.integration.test.ts`, change the `submitOverlayRun` call to pass `target: { kind: 'registry_preset' }` (single demo preset → auto-selected), drop the hardcoded `baselineModuleRef: { id: 'baseline', version: 'v1' }`, and assert the run reaches `completed` with a `comparison` block.
+In `mock-research-platform.adapter.ts`, the synthetic result is independent of selection — `switch` on
+`opts.target.kind` and produce the same deterministic result for either kind (no network). Typechecks; existing tests pass.
 
-- [ ] **Step 4: Verify**
+- [ ] **Step 5: MCP adapter — `baseline_ref` only**
+
+In `mcp-research-platform.adapter.ts`, map `{ kind: 'baseline_ref', moduleRef }` to its existing behavior
+(the old `baselineModuleRef`); for `{ kind: 'registry_preset' }` throw a clear error: `presets are only supported on the backtester integration`.
+
+- [ ] **Step 6: Update every enumerated call site + test**
+
+For each entry from Step 1, replace `baselineModuleRef: ref` with the appropriate `target`:
+- backtester/HTTP-path callers + the cross-repo e2e → `target: { kind: 'registry_preset' }` (single demo preset auto-selected; drop any hardcoded `baselineModuleRef: { id: 'baseline', version: 'v1' }`).
+- platform/MCP-path callers → `target: { kind: 'baseline_ref', moduleRef: ref }`.
+- mock-based unit tests → either kind, matching what each test asserts.
+Add an HTTP-adapter unit test asserting `submitOverlayRun(bundle, { target: { kind: 'baseline_ref', moduleRef } })` throws `unsupported_target`, and one asserting a `registry_preset` submission issues a request carrying `overlayRefs`/`riskProfileRef`/`executionProfileRef`/non-empty `metrics` (use a fake `BacktesterClientLike` whose `discoverRegistry` returns a one-preset descriptor).
+
+- [ ] **Step 7: Verify**
 ```bash
 pnpm typecheck
 pnpm test
 ```
-Expected: typecheck 0; unit/adapter suites green; the cross-repo e2e SKIPS without the env gate.
+Expected: typecheck 0; unit/adapter suites green (incl. the new HTTP-adapter target tests); the cross-repo e2e SKIPS without its env gate.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit (single working commit)**
 ```bash
-git add src/adapters/platform
-git commit -m "feat(platform): preset-driven overlay submission via registry discovery"
+git add src test
+git commit -m "feat(platform): discriminated overlay-run target + preset-driven backtester submission"
 ```
 
 ---
 
-### Task 11: Cross-repo acceptance (manual, demo stack)
+### Task 10: Cross-repo acceptance (manual, demo stack)
 
 **Files:** Verify only.
 
@@ -666,12 +815,11 @@ Expected: the run reaches `completed` with a real overlay `comparison`. This is 
 |---|---|
 | Version-dynamic release tooling (Decision 9) | 1 |
 | SDK 0.2.0 DTOs; SDK_VERSION→0.2.0, API stays 017.2 (Decisions 6) | 2 |
-| `discoverRegistry()` client method | 3 |
-| Canonical `TRUSTED_REGISTRY_DEFINITION` + parity + fail-fast validation (Decisions 7,8) | 4 |
-| `requestFingerprint` completeness (idempotency, goldens unchanged) | 5 |
+| `discoverRegistry()` client method (TDD fake-fetch test) | 3 |
+| Canonical `TRUSTED_REGISTRY_DEFINITION` (general types) + parity + fail-fast validation (Decisions 7,8) | 4 |
+| `requestFingerprint` completeness + legacy-hash idempotency compat (goldens unchanged) | 5 |
 | `GET /v1/registry`; pure-Ref presets (Decision 1 fix) | 6 |
 | No engine/validation/golden change; gates green | 4,5,7 |
 | Publish `sdk-v0.2.0` (manual) | 8 |
-| Discriminated `target`; all adapters (Decision: §7) | 9 |
-| Preset-driven `submitOverlayRun`; no array-position pick | 10 |
-| Cross-repo E2E `completed` + `comparison` | 11 |
+| Discriminated `target`; per-adapter support; all call sites; preset-driven submission (single commit) | 9 |
+| Cross-repo E2E `completed` + `comparison` | 10 |
