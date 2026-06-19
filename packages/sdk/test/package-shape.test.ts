@@ -29,4 +29,11 @@ describe('@trading-backtester/sdk package shape', () => {
     ]);
     expect(pkg.files.sort()).toEqual(['LICENSE', 'README.md', 'dist', 'schemas']);
   });
+
+  it('documents the migration boundary honestly', () => {
+    const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+    expect(readme).toContain('GitHub Release');
+    expect(readme).toContain('authoritative validation');
+    expect(readme).not.toContain('live order');
+  });
 });
