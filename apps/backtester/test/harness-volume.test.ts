@@ -22,6 +22,7 @@ describe('ensureHarnessInVolume', () => {
     expect(relative(mp, dest).startsWith('..')).toBe(false); // under the mountpoint
     expect(readFileSync(join(dest, 'entry.mjs'), 'utf8')).toContain('// entry');
     expect(readFileSync(join(dest, '_engine', 'engine.js'), 'utf8')).toContain('export const x');
+    expect(statSync(join(mp, 'harness')).mode & 0o777).toBe(0o755);
     expect(statSync(dest).mode & 0o777).toBe(0o755);
     expect(statSync(join(dest, 'entry.mjs')).mode & 0o777).toBe(0o644);
   });

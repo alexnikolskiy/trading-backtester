@@ -38,6 +38,7 @@ function hashDir(root: string): string {
     h.update(readFileSync(join(root, ...rel.split('/'))));
     h.update('\0');
   }
+  // 64 bits of sha256 — ample to keep distinct harness versions from colliding on a shared volume.
   return h.digest('hex').slice(0, 16);
 }
 
@@ -55,8 +56,9 @@ export function ensureHarnessInVolume(harnessDir: string, mountpoint: string): s
     makeWorldReadableSync(tmp);
     try {
       renameSync(tmp, dest); // atomic publish on the same filesystem
-    } catch {
-      rmSync(tmp, { recursive: true, force: true }); // lost a race; the other writer's dest stands
+    } catch (e) {
+      rmSync(tmp, { recursive: true, force: true });
+      if (!existsSync(dest)) throw e; // not a lost race — surface the real failure
     }
   }
   return dest;
