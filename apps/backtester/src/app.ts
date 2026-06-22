@@ -9,7 +9,7 @@ import type { AppConfig } from './config';
 import { FileArtifactStore, type ArtifactStore } from './artifacts/store';
 import { FixtureDataPort, type BacktesterDataPort } from './data/reader';
 import { HttpDataPort } from './data/http-data-port';
-import { MockPlatformDataPort } from './data/mock-platform-data-port';
+import { RowsDataPort } from './data/rows-data-port';
 import { createPool } from './db/pool';
 import { migrate } from './db/migrate';
 import {
@@ -70,11 +70,11 @@ export async function buildApp(config: AppConfig, overrides: BuildAppOptions = {
           ...(config.dataApiToken ? { token: config.dataApiToken } : {}),
           pageLimit: config.dataApiPageLimit,
         })
-      : config.dataSource === 'mock' && config.mockPlatformUrl
-      ? new MockPlatformDataPort({
+      : (config.dataSource === 'mock' || config.dataSource === 'real') && config.mockPlatformUrl
+      ? new RowsDataPort({
           baseUrl:   config.mockPlatformUrl,
           pageLimit: config.dataApiPageLimit,
-          ...(config.mockPlatformToken ? { opsToken: config.mockPlatformToken } : {}),
+          ...(config.mockPlatformToken ? { token: config.mockPlatformToken } : {}),
         })
       : new FixtureDataPort(config.fixturesDir));
   const artifactStore = overrides.artifactStore ?? new FileArtifactStore(config.artifactsDir);
