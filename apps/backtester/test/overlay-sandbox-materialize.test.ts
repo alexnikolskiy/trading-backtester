@@ -73,4 +73,25 @@ describe('materialize inline bundle → temp bundleDir + 017/019 acceptance-gate
 
     await cleanup();
   });
+
+  it('honours an explicit baseDir (writes the bundle under it, world-readable)', async () => {
+    const { mkdtempSync, statSync, existsSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const base = mkdtempSync(join(tmpdir(), 'btx-volbase-'));
+    try {
+      const inline = loadInlineBundle('short-after-pump');
+      const { bundleDir, cleanup } = await materializeBundle(inline, base);
+
+      expect(bundleDir.startsWith(base)).toBe(true);
+      expect(existsSync(join(bundleDir, 'manifest.json'))).toBe(true);
+      expect(statSync(bundleDir).mode & 0o777).toBe(0o755);
+      expect(statSync(base).mode & 0o777).toBe(0o755); // materializeBundle chmods the baseDir to 0755
+
+      await cleanup();
+      expect(existsSync(bundleDir)).toBe(false);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 });

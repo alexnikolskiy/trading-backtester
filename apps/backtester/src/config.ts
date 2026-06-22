@@ -6,6 +6,7 @@ import {
   SANDBOX_IMAGE,
   type SandboxPolicy,
 } from './engine/sandbox-policy';
+import { mountConfigFor } from './engine/sandbox/mounts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -33,6 +34,10 @@ export interface OverlaySandboxSettings {
   readonly image: string;
   /** Policy passed straight to `SandboxModuleExecutor`; defaults to `DEFAULT_SANDBOX` with `isolation.image` = resolved `image`. */
   readonly policy: SandboxPolicy;
+  /** Shared named volume for DooD bundle/harness delivery (demo). Unset → bind mode (dev). */
+  readonly volume?: string;
+  /** Backtester-side mountpoint of `volume` (e.g. /sandbox-shared). Set iff `volume` is set. */
+  readonly volumeMountpoint?: string;
 }
 
 export interface AppConfig {
@@ -80,6 +85,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   // OVERLAY sandbox (Slice-6b-A): default everything to the proven DEFAULT_SANDBOX policy,
   // overriding only image + optional resource limits from BACKTESTER_SANDBOX_OVERLAY_* env.
   const overlayImage = env.BACKTESTER_SANDBOX_OVERLAY_IMAGE ?? SANDBOX_IMAGE;
+  const overlayVolume = env.BACKTESTER_SANDBOX_OVERLAY_VOLUME;
+  const overlayVolumeMountpoint = env.BACKTESTER_SANDBOX_OVERLAY_VOLUME_MOUNTPOINT;
+  mountConfigFor(overlayVolume, overlayVolumeMountpoint); // throws on half-config (fail-fast)
   const overlayPolicy: SandboxPolicy = {
     ...DEFAULT_SANDBOX,
     isolation: { ...DEFAULT_SANDBOX.isolation, image: overlayImage },
@@ -142,6 +150,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       harnessDir: env.BACKTESTER_SANDBOX_OVERLAY_HARNESS_DIR ?? resolve(HERE, '../sandbox-harness-overlay'),
       image: overlayImage,
       policy: overlayPolicy,
+      ...(overlayVolume !== undefined ? { volume: overlayVolume } : {}),
+      ...(overlayVolumeMountpoint !== undefined ? { volumeMountpoint: overlayVolumeMountpoint } : {}),
     },
   };
 }
