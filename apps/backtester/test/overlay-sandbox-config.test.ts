@@ -51,4 +51,25 @@ describe('overlaySandbox config', () => {
     expect(c.sandbox.harnessDir).toMatch(/sandbox-harness$/);
     expect(c.sandbox.harnessDir).not.toMatch(/sandbox-harness-overlay$/);
   });
+
+  it('defaults volume + volumeMountpoint to undefined (bind mode)', () => {
+    const c = loadConfig({});
+    expect(c.overlaySandbox.volume).toBeUndefined();
+    expect(c.overlaySandbox.volumeMountpoint).toBeUndefined();
+  });
+
+  it('reads BACKTESTER_SANDBOX_OVERLAY_VOLUME + _VOLUME_MOUNTPOINT (volume mode)', () => {
+    const c = loadConfig({
+      BACKTESTER_SANDBOX_OVERLAY_VOLUME: 'btx-sandbox',
+      BACKTESTER_SANDBOX_OVERLAY_VOLUME_MOUNTPOINT: '/sandbox-shared',
+    });
+    expect(c.overlaySandbox.volume).toBe('btx-sandbox');
+    expect(c.overlaySandbox.volumeMountpoint).toBe('/sandbox-shared');
+  });
+
+  it('fails fast on half-config (volume set, mountpoint missing)', () => {
+    expect(() => loadConfig({ BACKTESTER_SANDBOX_OVERLAY_VOLUME: 'btx-sandbox' })).toThrow(
+      /both .* or neither/i,
+    );
+  });
 });
