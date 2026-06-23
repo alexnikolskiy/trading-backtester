@@ -41,6 +41,7 @@ describe('momentum candle arrays are not mutated by the runner (cache share inva
     const dataset = await loadDataset();
     const beforeRef = dataset.candles('BTCUSDT');
     const beforeLen = beforeRef.length;
+    expect(beforeLen).toBeGreaterThan(0); // guard: a non-empty fixture, else the assertions below are vacuous
     const beforeJson = JSON.stringify(beforeRef);
 
     await runBacktest(REQ, { dataset });
