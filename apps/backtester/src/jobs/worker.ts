@@ -35,6 +35,7 @@ import type { BundleStore } from '../sandbox/bundle-store';
 import type { OverlaySandboxSettings } from '../config';
 import { publishCompletion, type CompletionDeps } from './completion';
 import type { JobRow, JobStore } from './job-store';
+import { overlayTapeCache, momentumTapeCache, tapeCacheKey } from '../data/tape-cache.js';
 
 export { RunnerError };
 
@@ -129,12 +130,22 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
     if (claimed.request.engine === 'overlay') {
       // ===== OVERLAY PATH — lifted engine end-to-end (Slice 6a) =====
       const r = claimed.request;
-      const marketTape = await buildOverlayDataset(deps.dataPort, {
-        datasetRef: r.datasetRef,
-        symbols: r.symbols,
-        timeframe: r.timeframe,
-        period: r.period,
-      });
+      const marketTape = await overlayTapeCache.getOrBuild(
+        tapeCacheKey({
+          datasetRef: r.datasetRef,
+          symbols: r.symbols,
+          timeframe: r.timeframe,
+          from: r.period.from,
+          to: r.period.to,
+        }),
+        () =>
+          buildOverlayDataset(deps.dataPort, {
+            datasetRef: r.datasetRef,
+            symbols: r.symbols,
+            timeframe: r.timeframe,
+            period: r.period,
+          }),
+      );
       // Wire-summary fingerprint only — NOT part of the hashed RunOutcome (platform golden).
       dsFingerprint = contentRef(r.symbols.map((s) => marketTape.candles(s)));
 
@@ -195,17 +206,26 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
       // ===== MOMENTUM PATH — unchanged (golden eff10116… must not move) =====
       executor = await executorFor(deps, claimed);
 
-      const reader = await deps.dataPort.openDataset(claimed.datasetRef);
-      if (!reader) {
-        throw new RunnerError('missing_dataset', `unknown dataset: ${claimed.datasetRef}`);
-      }
-
       const { tsFrom, tsTo } = periodMs(claimed.request.period);
-      const dataset = await materialize(reader, claimed.datasetRef, {
-        tsFrom,
-        tsTo,
-        symbols: claimed.request.symbols,
-      });
+      const dataset = await momentumTapeCache.getOrBuild(
+        tapeCacheKey({
+          datasetRef: claimed.datasetRef,
+          symbols: claimed.request.symbols,
+          from: tsFrom,
+          to: tsTo,
+        }),
+        async () => {
+          const reader = await deps.dataPort.openDataset(claimed.datasetRef);
+          if (!reader) {
+            throw new RunnerError('missing_dataset', `unknown dataset: ${claimed.datasetRef}`);
+          }
+          return materialize(reader, claimed.datasetRef, {
+            tsFrom,
+            tsTo,
+            symbols: claimed.request.symbols,
+          });
+        },
+      );
       dsFingerprint = datasetFingerprint(dataset);
 
       const request: BacktestRunRequest = {
