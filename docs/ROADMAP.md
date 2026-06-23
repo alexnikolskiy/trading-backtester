@@ -155,6 +155,81 @@ Cross-repo changes can be rolled out predictably without manual re-debugging of 
 
 `trading-lab` discovers a preset, submits its own overlay bundle against it, and the run reaches `completed` with a real comparison. ✅
 
+## Feature 8: Sandbox Execution Performance (proposed — not started)
+
+**Goal:** keep the per-run Docker isolation for **untrusted** overlay bundles, but stop paying its full
+cost on every analysis as strategy/analysis volume grows. Performance was an explicit **non-goal** of the
+sandbox-topology work (`2026-06-22-sandbox-execution-topology-*.md`); this is the follow-up that picks it up.
+
+**Why now:** evaluated against `tripolskypetr/backtest-kit` (Habr 1037822). Its headline throughput (one
+Node process, in-process, no isolation) is a *consequence of running the author's own trusted code* — not a
+trick we are missing. We run untrusted LLM-generated overlays, so the sandbox is the point. The adoptable
+ideas are caching + parallelism, **not** dropping isolation.
+
+### Cost model (grounded in code, 2026-06-23)
+
+- Docker+IPC is paid **only when a run carries a `bundleHash`** (untrusted bundle). First-party/trusted
+  strategies already run fully in-process (`InProcessTrustedModuleExecutor` / `TrustedMomentumExecutor`
+  via the `ModuleExecutor` seam) — no container, no IPC.
+- For untrusted runs: **one container per symbol per run** (cold start = `SandboxSession.open()` →
+  `docker run` + node boot + bundle import + `init` ack) **+ synchronous per-bar IPC** (`onBarClose` /
+  overlay `apply` every bar → one `SyncIpcChannel` round-trip; blocking `readSync` + 1 ms busy-wait).
+- Per-run container lifecycle, **no cross-run reuse**. Session compute budget `wallTimeMsPerSession` = 30 s.
+
+### Proposed changes (ladder: cheap → invasive)
+
+1. **Cross-run dataset/tape cache.** `buildOverlayDataset` / `materialize` rebuild the `MarketTapeDataset`
+   from the data port on every run; cache by `(datasetRef, window, symbols)` (in-mem LRU or Redis) and
+   reuse across analyses. Orthogonal to the sandbox; lowest risk. (This is backtest-kit's Redis-O(1)
+   insight, applied at the right layer.)
+2. **Parallel run execution.** `claimNextQueued` is already concurrency-safe (`FOR UPDATE SKIP LOCKED`);
+   only the single-worker `drainQueue` loop is serial. Run **N workers / concurrent claims** → scales the
+   "many analyses × many strategies" case directly (the natural axis — don't speed up one run, run many).
+3. **Warm/pooled sandbox.** Pool of pre-spawned locked-down containers; per run = **warm container +
+   fresh process + tmpfs reset** (never reuse a process across untrusted strategies — leaks state).
+   Removes cold-start; preserves every lockdown flag. Already flagged as future work in the topology spec.
+4. **Amortize per-bar IPC.** Highest leverage, most design. Options: move the bar loop **into** the
+   sandbox (stream decisions out; host keeps data/PnL/risk/metrics + `DecisionRevalidator`); or chunk K
+   bars per round-trip; or replace the `sleepMs(1)` busy-wait with a blocking read + length-framing.
+   Care: point-in-time discipline (no future bars) currently relies on the host dripping one bar at a time.
+
+### Non-goals / guardrails
+
+- **Never** drop the sandbox for untrusted overlays — non-negotiable per the topology spec.
+- Redis-row-id O(1) candle lookup specifically is premature (< 10 symbols / 1 m); our wins are pool +
+  batch + parallelism, not candle-lookup complexity.
+
+### Recommended order
+
+**1 + 2 first** (cheap, cover the "many analyses" scenario), then **3**, then **4** only if long
+fine-grained untrusted runs become the dominant cost.
+
+### Baseline measurements
+
+Repeatable harness: `apps/backtester/test/bench-sandbox-perf.test.ts`
+(`RUN_BENCH=1 pnpm exec vitest run apps/backtester/test/bench-sandbox-perf.test.ts`) — real pinned image +
+built harness, Docker-gated, **network-free** (hand-built host ctx; no data port → no `@trading-platform/sdk`).
+
+_Measured 2026-06-23 on the WSL2 dev stand (Docker 29.5.3, `node:24-bookworm-slim`, DooD; cpus 1 / mem 128 MiB):_
+
+| Cost | p50 | mean | p95 | p99 | max |
+|---|---|---|---|---|---|
+| **cold-start** `open()` (docker run + node boot + bundle init) | **4.14 s** | 4.08 s | 6.02 s | — | 6.02 s |
+| **per-bar round-trip** (`callHook`; incl. harness 4-indicator recompute) | **8.5 ms** | 13.3 ms | 34.6 ms | 95 ms | 244 ms |
+
+Implications: cold-start is paid **once per symbol per run** (~4 s here — inflated by WSL2/DooD; native
+Linux/CI will be lower). Per-bar round-trip at 8.5 ms p50 ⇒ a 30-day 1 m run ≈ **~366 s/symbol serial**, which
+also blows the 30 s `wallTimeMsPerSession` budget at ~3.5k bars — so today a long fine-grained untrusted run
+cannot complete without a raised budget. Both numbers confirm the scaling concern and rank the ladder:
+warm-pool (#3) attacks the 4 s cold-start; IPC batching (#4) attacks the per-bar tax; dataset cache (#1) +
+parallel runs (#2) cut redundant work across the many-analyses fan-out.
+
+### Done when
+
+The untrusted-overlay path scales to many concurrent analyses without per-run cold-start and redundant
+data re-materialization dominating wall-clock — while every sandbox lockdown flag and the per-run
+isolation boundary stay intact.
+
 ## Remaining Work
 
 The core product flow is closed. What's left:
