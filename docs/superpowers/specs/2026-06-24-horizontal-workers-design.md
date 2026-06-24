@@ -184,6 +184,41 @@ serial → ~50 min on 8 cores, ~25 min on 16 cores.
 - **Fail-fast:** worker entrypoint without `DATABASE_URL` exits non-zero with a
   clear message.
 
+## Horizontal scale-out (multi-machine) — ready by construction
+
+This design scales across machines without rework, because the only coordination
+point is the shared Postgres queue:
+
+- **Claim is cross-host atomic.** `FOR UPDATE SKIP LOCKED` is a database-level
+  lock, so any number of worker processes on any number of machines pointed at the
+  same `DATABASE_URL` never double-claim. N× 32-core servers = run ~cores workers
+  per box against one Postgres.
+- **Lease/heartbeat/requeue is cross-host.** `WORKER_ID = ${hostname}:${pid}` is
+  globally unique, so a dead machine's orphaned `running` jobs are requeued by the
+  reaper exactly like a dead process. No machine affinity is assumed anywhere.
+
+Cross-machine deltas — all already behind existing seams, so they are
+"add an implementation", NOT a redesign (and remain out of scope here / future
+sub-projects):
+
+- **Artifact store** (`ArtifactStore` seam; today `FileArtifactStore` = local
+  disk): MUST be shared/networked (S3-like, or DB-backed) so the API node can
+  serve artifacts a remote worker wrote. This is the main multi-machine
+  prerequisite — a new `ArtifactStore` impl behind the existing interface.
+- **Bundle store** (`BundleStore` seam; today `FileBundleStore` = local disk):
+  same — a worker on another machine must read a submitted bundle. New impl behind
+  the seam.
+- **Data access** (`BacktesterDataPort` seam): `HttpDataPort`/`RowsDataPort` are
+  already networked; only `FixtureDataPort` is local-disk.
+- **L2 tape cache** (sub-project 2): without it each of the ~N workers materializes
+  the sweep's tape once; an L2 (Redis/object store) shares one materialization.
+  Optimization, not a correctness blocker.
+- Ops: Postgres reachable from all hosts; connection-pool sizing for many workers;
+  each worker host runs Docker (sandbox containers are local to the worker).
+
+The core in this spec assumes nothing single-machine; multi-machine is a deploy +
+seam-implementation exercise on top, not a rewrite.
+
 ## Scope / non-goals (YAGNI)
 
 Out: L2 shared tape cache (sub-project 2), sweep/grid submission + aggregation API
