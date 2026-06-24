@@ -4,6 +4,7 @@
 import { buildApp, type AppHandles } from './app.js';
 import { loadConfig, type AppConfig } from './config.js';
 import { runWorkerLoop } from './jobs/worker.js';
+import { pathToFileURL } from 'node:url';
 
 export function assertWorkerConfig(config: AppConfig): void {
   if (!config.databaseUrl) {
@@ -45,8 +46,10 @@ async function main(): Promise<void> {
   await loop;
 }
 
-// Only run when executed directly (not when imported by the unit test).
-if (process.argv[1] && process.argv[1].endsWith('worker-main.js')) {
+// Run only when executed directly — NOT when imported by the unit test. Compare this module's URL
+// to argv[1] so it works under both `tsx src/worker-main.ts` (.ts) and `node dist/worker-main.js`
+// (the old `.endsWith('worker-main.js')` check silently no-op'd under tsx → `pnpm worker` did nothing).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main().catch((err) => {
     // eslint-disable-next-line no-console
     console.error(err);
