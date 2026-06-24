@@ -74,6 +74,9 @@ describe('execution validation — backtester fill model matches close-to-close 
         // Assertion B (paper fidelity — reconciling trades only):
         // When the snapshot bars reproduce the paper engine's live fill prices,
         // the backtester must also match paper.
+        // 1e-3 is intentionally coarser than Assertion A's 1e-4: it screens out trades where
+        // snapshot bars diverged from the paper engine's live fills, not a fill-model precision gate.
+        // Do NOT tighten this to match Assertion A — that would silently exclude divergent trades.
         if (Math.abs(c2c - paper) <= 1e-3) {
           expect(r.backtestPnlPct).toBeCloseTo(paper, 4);
           reconciledCount++;

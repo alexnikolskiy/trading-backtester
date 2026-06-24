@@ -37,6 +37,20 @@ const req: BacktestRunRequest = {
   executionProfileRef: { id: 'same_bar', version: '1.0.0' }, seed: 1, metrics: ['pnl'],
 } as unknown as BacktestRunRequest;
 
+const replayShortMod: StrategyModule = {
+  manifest: { ...shortAfterPump.manifest, id: 'replay-short', version: '1.0.0', name: 'replay-short', hooks: ['onBarClose', 'onPositionBar'] },
+  onBarClose: (ctx: any) => (ctx.bar.ts === TS0 + 1 * 60_000 ? { kind: 'enter', side: 'short' } : { kind: 'idle' }),
+  onPositionBar: (ctx: any) => (ctx.bar.ts === TS0 + 3 * 60_000 ? { kind: 'exit', target: 'replay-short' } : { kind: 'idle' }),
+} as unknown as StrategyModule;
+
+const reqShort: BacktestRunRequest = {
+  runId: 'sbc-short-1', mode: 'research', moduleRef: { id: 'replay-short', version: '1.0.0' },
+  datasetRef: 'tst', symbols: ['TST'], timeframe: '1m',
+  period: { from: new Date(TS0).toISOString(), to: new Date(TS0 + 5 * 60_000).toISOString() },
+  riskProfileRef: { id: 'default_risk', version: '1.0.0' },
+  executionProfileRef: { id: 'same_bar', version: '1.0.0' }, seed: 1, metrics: ['pnl'],
+} as unknown as BacktestRunRequest;
+
 describe('same_bar_close fill model', () => {
   it('fills enter/exit at the decision bar close', async () => {
     const built = marketTapeFromCanonicalRows('tst', '1m', rows);
@@ -51,5 +65,25 @@ describe('same_bar_close fill model', () => {
     expect(trades[0].exitFillPrice).toBe(135);  // close of bar index 3
     const pnlPct = (trades[0].exitFillPrice - trades[0].entryFillPrice) / trades[0].entryFillPrice * 100;
     expect(pnlPct).toBeCloseTo((135 - 115) / 115 * 100, 9);
+  });
+
+  it('fills SHORT enter/exit at the decision bar close with correct negative pnl', async () => {
+    // Enter SHORT on bar index 1 (close 115), exit on bar index 3 (close 135).
+    // Short exits at a HIGHER price than entry → realized pnl must be NEGATIVE.
+    const built = marketTapeFromCanonicalRows('tst', '1m', rows);
+    if (!built.ok) throw new Error(built.detail);
+    const registry = createModuleRegistry({ strategies: [replayShortMod], riskProfiles: [DEFAULT_RISK], executionProfiles: [SAME_BAR_EXEC] });
+    const out = await runBacktest(reqShort, { registry, marketTape: built.tape, router: createTrustedRouter() });
+    expect(out.status).toBe('completed');
+    if (out.status !== 'completed') return;
+    const trades = out.baseline.trades;
+    expect(trades.length).toBe(1);
+    expect(trades[0].side).toBe('short');
+    expect(trades[0].entryFillPrice).toBe(115); // close of bar index 1
+    expect(trades[0].exitFillPrice).toBe(135);  // close of bar index 3
+    // Short pnl: (entry - exit) / entry * 100 → (115 - 135) / 115 * 100 < 0
+    expect(trades[0].realizedPnl).toBeLessThan(0);
+    const pnlPct = (trades[0].entryFillPrice - trades[0].exitFillPrice) / trades[0].entryFillPrice * 100;
+    expect(pnlPct).toBeCloseTo((115 - 135) / 115 * 100, 9);
   });
 });
