@@ -51,9 +51,15 @@ keeping the single in-process worker (the measured ~1.74× ceiling is the proble
   `queued→running`, `running→{completed,failed,canceled,timed_out}`.
 - Multi-process **requires** PgJobStore (InMemory is per-process). The worker
   entrypoint fails fast without `DATABASE_URL`.
-- Each worker keeps its own L1 tape cache (perf #1). Sharing it across processes
-  (L2) is sub-project 2 — out of scope here; M processes each materialize the
-  sweep's one tape once (M builds total, not N).
+- Each worker keeps its own L1 tape cache (perf #1). The cache key
+  (`tape-cache.ts`) is the DATA SLICE only — `datasetRef | timeframe | from | to |
+  symbols(sorted)` — NOT strategy/params/overlay, so any runs over the same period
+  (even different strategies/params) share the tape; and `getOrBuild` caches the
+  in-flight Promise, so N concurrent same-key runs in one process trigger exactly
+  ONE materialization (no N-build race under the now-real async overlap). Sharing
+  it ACROSS processes (L2) is sub-project 2 — out of scope here; M worker
+  processes each materialize the sweep's one tape once (M builds total, not 1 and
+  not N).
 
 ## Design
 
