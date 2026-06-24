@@ -59,6 +59,9 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@trading-platform/sdk':
+        specifier: https://github.com/alexnikolskiy/trading-platform-sdk/releases/download/sdk-v0.7.1/trading-platform-sdk-0.7.1.tgz
+        version: https://github.com/alexnikolskiy/trading-platform-sdk/releases/download/sdk-v0.7.1/trading-platform-sdk-0.7.1.tgz
       decimal.js:
         specifier: ^10.4.3
         version: 10.6.0
