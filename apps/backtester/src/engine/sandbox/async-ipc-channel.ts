@@ -11,6 +11,7 @@ export class AsyncIpcChannel {
   private stdoutAcc = '';
   private stdoutTotal = 0;
   private stderrBuf = '';
+  private stderrTotal = 0;
   private eof = false;
   private errored = false;
   private overflow = false;
@@ -35,11 +36,16 @@ export class AsyncIpcChannel {
     stdout.on('end', () => { this.eof = true; this.wake(); });
     stdout.on('error', () => { this.errored = true; this.wake(); });
     stderr.on('data', (chunk: Buffer) => {
+      this.stderrTotal += chunk.length;
       if (this.stderrBuf.length < this.limits.maxStderrBytes) {
         this.stderrBuf += chunk.toString('utf8');
         if (this.stderrBuf.length > this.limits.maxStderrBytes) {
           this.stderrBuf = `${this.stderrBuf.slice(0, this.limits.maxStderrBytes)}…[truncated]`;
         }
+      }
+      if (this.stderrTotal > this.limits.maxStderrBytes * 4) {
+        this.overflow = true;
+        this.wake();
       }
     });
   }

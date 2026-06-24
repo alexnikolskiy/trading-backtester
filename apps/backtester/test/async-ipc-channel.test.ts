@@ -76,4 +76,13 @@ describe('AsyncIpcChannel', () => {
     expect(ch.stderrText()).toContain('…[truncated]');
     expect(ch.stderrText().length).toBeLessThanOrEqual('z'.repeat(256).length + '…[truncated]'.length);
   });
+
+  it('returns overflow when stderr floods beyond maxStderrBytes * 4', async () => {
+    // maxStderrBytes = 256; flood threshold = 256 * 4 = 1024; write 1025 bytes → overflow
+    const { ch, stderr } = mk();
+    const p = ch.receive(Date.now() + 2000);
+    stderr.write('e'.repeat(1025));
+    const out = await p;
+    expect(out.kind).toBe('overflow');
+  });
 });
