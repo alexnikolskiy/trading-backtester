@@ -6,7 +6,7 @@ import { loadConfig } from './config';
 async function main(): Promise<void> {
   const config = loadConfig();
   const app = await buildApp(config);
-  app.startWorker();
+  if (config.autoWorker) app.startWorker();
 
   const addr = await app.server.listen({ host: config.host, port: config.port });
   // eslint-disable-next-line no-console

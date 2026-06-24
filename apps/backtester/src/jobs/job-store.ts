@@ -32,6 +32,12 @@ export interface JobRow {
   queueDeadlineMs?: number;
   runTimeoutMs: number;
   runDeadlineMs?: number;
+  /** Worker that currently holds this job (multi-process lease); absent when unclaimed. */
+  leasedBy?: string;
+  /** Epoch ms after which the lease is stale and the job may be requeued. */
+  leaseExpiresAt?: number;
+  /** Number of times this job has been claimed (for bounded requeue / poison detection). */
+  attempts: number;
   acceptedAtMs: number;
   queuedAtMs?: number;
   startedAtMs?: number;
@@ -102,12 +108,13 @@ export interface JobEventRow {
 export interface JobStore {
   insertOrGet(job: NewJob): Promise<{ job: JobRow; created: boolean }>;
   get(runId: string): Promise<JobRow | undefined>;
-  transition(runId: string, from: RunStatus, to: RunStatus, patch: JobRowPatch): Promise<boolean>;
-  claimNextQueued(nowMs: number): Promise<JobRow | undefined>;
+  transition(runId: string, from: RunStatus, to: RunStatus, patch: JobRowPatch, expectLeasedBy?: string): Promise<boolean>;
+  claimNextQueued(nowMs: number, lease?: { workerId: string; ttlMs: number }): Promise<JobRow | undefined>;
+  renewLease(workerId: string, untilMs: number): Promise<void>;
   list(filter?: { status?: RunStatus; correlationId?: string; workflowId?: string }): Promise<JobRow[]>;
   appendEvent(ev: JobEventRow): Promise<void>;
   listEvents(runId: string): Promise<JobEventRow[]>;
-  reapDeadlines(nowMs: number): Promise<JobRow[]>;
+  reapDeadlines(nowMs: number, opts?: { leaseMaxAttempts?: number }): Promise<JobRow[]>;
   /** Outbox: terminal events still pending/failed delivery, oldest first. */
   listDeliverable(limit: number): Promise<JobEventRow[]>;
   markDelivered(eventUid: string, ok: boolean): Promise<void>;
@@ -128,6 +135,7 @@ export class InMemoryJobStore implements JobStore {
     const row: JobRow = {
       ...job,
       status: 'accepted',
+      attempts: 0,
       timeline: [{ status: 'accepted', atMs: job.acceptedAtMs }],
     };
     this.jobs.set(row.runId, row);
@@ -144,9 +152,11 @@ export class InMemoryJobStore implements JobStore {
     from: RunStatus,
     to: RunStatus,
     patch: JobRowPatch,
+    expectLeasedBy?: string,
   ): Promise<boolean> {
     const job = this.jobs.get(runId);
     if (!job || job.status !== from || !canTransition(from, to)) return false;
+    if (expectLeasedBy !== undefined && job.leasedBy !== expectLeasedBy) return false;
     job.status = to;
     if (patch.queuedAtMs !== undefined) job.queuedAtMs = patch.queuedAtMs;
     if (patch.startedAtMs !== undefined) job.startedAtMs = patch.startedAtMs;
@@ -162,7 +172,10 @@ export class InMemoryJobStore implements JobStore {
     return true;
   }
 
-  async claimNextQueued(nowMs: number): Promise<JobRow | undefined> {
+  async claimNextQueued(
+    nowMs: number,
+    lease?: { workerId: string; ttlMs: number },
+  ): Promise<JobRow | undefined> {
     const queued = [...this.jobs.values()]
       .filter((j) => j.status === 'queued')
       .sort((a, b) =>
@@ -177,7 +190,19 @@ export class InMemoryJobStore implements JobStore {
       lastActivityMs: nowMs,
       runDeadlineMs: nowMs + next.runTimeoutMs,
     });
-    return ok ? next : undefined;
+    if (!ok) return undefined;
+    if (lease !== undefined) {
+      next.leasedBy = lease.workerId;
+      next.leaseExpiresAt = nowMs + lease.ttlMs;
+      next.attempts += 1;
+    }
+    return next;
+  }
+
+  async renewLease(workerId: string, untilMs: number): Promise<void> {
+    for (const job of this.jobs.values()) {
+      if (job.status === 'running' && job.leasedBy === workerId) job.leaseExpiresAt = untilMs;
+    }
   }
 
   async list(filter?: {
@@ -214,7 +239,8 @@ export class InMemoryJobStore implements JobStore {
     ev.deliveryAttempts = (ev.deliveryAttempts ?? 0) + 1;
   }
 
-  async reapDeadlines(nowMs: number): Promise<JobRow[]> {
+  async reapDeadlines(nowMs: number, opts?: { leaseMaxAttempts?: number }): Promise<JobRow[]> {
+    const maxAttempts = opts?.leaseMaxAttempts ?? 3;
     const reaped: JobRow[] = [];
     for (const job of this.jobs.values()) {
       if (isTerminal(job.status)) continue;
@@ -224,23 +250,30 @@ export class InMemoryJobStore implements JobStore {
         nowMs > job.queueDeadlineMs
       ) {
         if (await this.transition(job.runId, 'queued', 'expired', {
-          atMs: nowMs,
-          terminalAtMs: nowMs,
-          terminalCode: 'queue_deadline_exceeded',
-        })) {
-          reaped.push(job);
-        }
-      } else if (
-        job.status === 'running' &&
-        job.runDeadlineMs !== undefined &&
-        nowMs > job.runDeadlineMs
-      ) {
-        if (await this.transition(job.runId, 'running', 'timed_out', {
-          atMs: nowMs,
-          terminalAtMs: nowMs,
-          terminalCode: 'run_deadline_exceeded',
-        })) {
-          reaped.push(job);
+          atMs: nowMs, terminalAtMs: nowMs, terminalCode: 'queue_deadline_exceeded',
+        })) reaped.push(job);
+      } else if (job.status === 'running') {
+        const leaseStale = job.leaseExpiresAt !== undefined && nowMs > job.leaseExpiresAt;
+        const runStale = job.runDeadlineMs !== undefined && nowMs > job.runDeadlineMs;
+        if (leaseStale && job.attempts >= maxAttempts) {
+          if (await this.transition(job.runId, 'running', 'failed', {
+            atMs: nowMs, terminalAtMs: nowMs, terminalCode: 'lease_expired',
+          })) reaped.push(job);
+        } else if (leaseStale) {
+          // requeue (non-terminal): clear the lease so a fresh worker can re-claim. Re-fetch the
+          // canonical row after the transition rather than mutating the iterated reference, so this
+          // does not depend on transition()'s in-place-vs-replace mutation strategy.
+          if (await this.transition(job.runId, 'running', 'queued', { atMs: nowMs, queuedAtMs: nowMs })) {
+            const requeued = this.jobs.get(job.runId);
+            if (requeued !== undefined) {
+              requeued.leasedBy = undefined;
+              requeued.leaseExpiresAt = undefined;
+            }
+          }
+        } else if (runStale) {
+          if (await this.transition(job.runId, 'running', 'timed_out', {
+            atMs: nowMs, terminalAtMs: nowMs, terminalCode: 'run_deadline_exceeded',
+          })) reaped.push(job);
         }
       }
     }

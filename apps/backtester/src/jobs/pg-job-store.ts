@@ -43,6 +43,9 @@ interface JobDbRow {
   queue_deadline_ms: string | null;
   run_timeout_ms: string;
   run_deadline_ms: string | null;
+  leased_by: string | null;
+  lease_expires_at: string | null;
+  attempts: string | number;
   accepted_at_ms: string;
   queued_at_ms: string | null;
   started_at_ms: string | null;
@@ -76,6 +79,9 @@ function rowToJob(r: JobDbRow): JobRow {
     queueDeadlineMs: num(r.queue_deadline_ms),
     runTimeoutMs: Number(r.run_timeout_ms),
     runDeadlineMs: num(r.run_deadline_ms),
+    leasedBy: str(r.leased_by),
+    leaseExpiresAt: num(r.lease_expires_at),
+    attempts: Number(r.attempts ?? 0),
     acceptedAtMs: Number(r.accepted_at_ms),
     queuedAtMs: num(r.queued_at_ms),
     startedAtMs: num(r.started_at_ms),
@@ -170,6 +176,7 @@ export class PgJobStore implements JobStore {
     from: RunStatus,
     to: RunStatus,
     patch: JobRowPatch,
+    expectLeasedBy?: string,
   ): Promise<boolean> {
     if (!canTransition(from, to)) return false;
     const entry: RunTimelineEntry[] = [{ status: to, atMs: patch.atMs }];
@@ -187,7 +194,8 @@ export class PgJobStore implements JobStore {
          dataset_fingerprint    = COALESCE($12, dataset_fingerprint),
          terminal_code          = COALESCE($13, terminal_code),
          timeline_json          = timeline_json || $14::jsonb
-       WHERE run_id = $2 AND status = $3`,
+       WHERE run_id = $2 AND status = $3
+         AND ($15::text IS NULL OR leased_by = $15)`,
       [
         to,
         runId,
@@ -203,12 +211,16 @@ export class PgJobStore implements JobStore {
         patch.datasetFingerprint ?? null,
         patch.terminalCode ?? null,
         JSON.stringify(entry),
+        expectLeasedBy ?? null,
       ],
     );
     return r.rowCount === 1;
   }
 
-  async claimNextQueued(nowMs: number): Promise<JobRow | undefined> {
+  async claimNextQueued(
+    nowMs: number,
+    lease?: { workerId: string; ttlMs: number },
+  ): Promise<JobRow | undefined> {
     const entry: RunTimelineEntry[] = [{ status: 'running', atMs: nowMs }];
     const r = await this.pool.query<JobDbRow>(
       `WITH next AS (
@@ -223,12 +235,23 @@ export class PgJobStore implements JobStore {
          started_at_ms = $1::bigint,
          last_activity_ms = $1::bigint,
          run_deadline_ms = $1::bigint + j.run_timeout_ms,
+         leased_by = $3,
+         lease_expires_at = CASE WHEN $3::text IS NULL THEN NULL ELSE $1::bigint + $4::bigint END,
+         attempts = CASE WHEN $3::text IS NULL THEN j.attempts ELSE j.attempts + 1 END,
          timeline_json = j.timeline_json || $2::jsonb
        FROM next WHERE j.run_id = next.run_id
        RETURNING j.*`,
-      [nowMs, JSON.stringify(entry)],
+      [nowMs, JSON.stringify(entry), lease?.workerId ?? null, lease?.ttlMs ?? 0],
     );
     return r.rows[0] ? rowToJob(r.rows[0]) : undefined;
+  }
+
+  async renewLease(workerId: string, untilMs: number): Promise<void> {
+    await this.pool.query(
+      `UPDATE backtest_job SET lease_expires_at = $2::bigint
+       WHERE status = 'running' AND leased_by = $1`,
+      [workerId, untilMs],
+    );
   }
 
   async list(filter?: {
@@ -304,7 +327,8 @@ export class PgJobStore implements JobStore {
     );
   }
 
-  async reapDeadlines(nowMs: number): Promise<JobRow[]> {
+  async reapDeadlines(nowMs: number, opts?: { leaseMaxAttempts?: number }): Promise<JobRow[]> {
+    const maxAttempts = opts?.leaseMaxAttempts ?? 3;
     const expired = await this.pool.query<JobDbRow>(
       `UPDATE backtest_job SET
          status = 'expired', terminal_at_ms = $1::bigint, terminal_code = 'queue_deadline_exceeded',
@@ -312,6 +336,25 @@ export class PgJobStore implements JobStore {
        WHERE status = 'queued' AND queue_deadline_ms IS NOT NULL AND $1::bigint > queue_deadline_ms
        RETURNING *`,
       [nowMs, JSON.stringify([{ status: 'expired', atMs: nowMs }])],
+    );
+    // Poison: expired-lease running jobs at/over the attempts cap → terminal failure.
+    const poisoned = await this.pool.query<JobDbRow>(
+      `UPDATE backtest_job SET
+         status = 'failed', terminal_at_ms = $1::bigint, terminal_code = 'lease_expired',
+         timeline_json = timeline_json || $2::jsonb
+       WHERE status = 'running' AND lease_expires_at IS NOT NULL
+         AND $1::bigint > lease_expires_at AND attempts >= $3
+       RETURNING *`,
+      [nowMs, JSON.stringify([{ status: 'failed', atMs: nowMs }]), maxAttempts],
+    );
+    // Requeue: expired-lease running jobs under the cap → back to 'queued', lease cleared (non-terminal).
+    await this.pool.query(
+      `UPDATE backtest_job SET
+         status = 'queued', queued_at_ms = $1::bigint, leased_by = NULL, lease_expires_at = NULL,
+         timeline_json = timeline_json || $2::jsonb
+       WHERE status = 'running' AND lease_expires_at IS NOT NULL
+         AND $1::bigint > lease_expires_at AND attempts < $3`,
+      [nowMs, JSON.stringify([{ status: 'queued', atMs: nowMs }]), maxAttempts],
     );
     const timedOut = await this.pool.query<JobDbRow>(
       `UPDATE backtest_job SET
@@ -321,6 +364,6 @@ export class PgJobStore implements JobStore {
        RETURNING *`,
       [nowMs, JSON.stringify([{ status: 'timed_out', atMs: nowMs }])],
     );
-    return [...expired.rows, ...timedOut.rows].map(rowToJob);
+    return [...expired.rows, ...poisoned.rows, ...timedOut.rows].map(rowToJob);
   }
 }

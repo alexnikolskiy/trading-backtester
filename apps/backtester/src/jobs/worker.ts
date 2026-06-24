@@ -33,7 +33,7 @@ import { runBacktest } from '../runner/run-backtest';
 import { SandboxModuleExecutor, type SandboxConfig } from '../sandbox/sandbox-executor';
 import type { BundleStore } from '../sandbox/bundle-store';
 import type { OverlaySandboxSettings } from '../config';
-import { publishCompletion, type CompletionDeps } from './completion';
+import { publishCompletion, reapAndPublish, type CompletionDeps } from './completion';
 import type { JobRow, JobStore } from './job-store';
 import { overlayTapeCache, momentumTapeCache, tapeCacheKey } from '../data/tape-cache.js';
 import { runBoundedPool } from './pool.js';
@@ -52,6 +52,8 @@ export interface WorkerDeps extends CompletionDeps {
   bundleStore?: BundleStore;
   sandbox?: SandboxConfig;
   overlaySandbox: OverlaySandboxSettings;
+  /** When set, the worker claims with a lease and owner-guards its terminal transitions. */
+  lease?: { workerId: string; ttlMs: number; maxAttempts: number };
 }
 
 function periodMs(period: RunPeriod): { tsFrom: number; tsTo: number } {
@@ -111,7 +113,10 @@ export function overlaySandboxDeps(s: OverlaySandboxSettings): SandboxExecutorDe
 
 /** Claim and run one queued job. Returns the (now terminal) row, or undefined if the queue was empty. */
 export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | undefined> {
-  const claimed = await deps.store.claimNextQueued(deps.clock());
+  const claimed = await deps.store.claimNextQueued(
+    deps.clock(),
+    deps.lease ? { workerId: deps.lease.workerId, ttlMs: deps.lease.ttlMs } : undefined,
+  );
   if (!claimed) return undefined;
   const runId = claimed.runId;
 
@@ -277,7 +282,7 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
       resultHash,
       artifactManifest: manifest,
       datasetFingerprint: dsFingerprint,
-    });
+    }, deps.lease?.workerId);
   } catch (err) {
     const code = err instanceof RunnerError ? err.code : 'runner_failure';
     const terminalStatus = err instanceof RunnerError ? err.terminalStatus : 'failed';
@@ -286,7 +291,7 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
       atMs: now,
       terminalAtMs: now,
       terminalCode: code,
-    });
+    }, deps.lease?.workerId);
   } finally {
     await executor?.close?.();
     sandboxRouter?.closeAll();
@@ -301,4 +306,38 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
 /** Drain queued jobs with up to `concurrency` runs in flight (default 1 = serial). Returns count processed. */
 export async function drainQueue(deps: WorkerDeps, concurrency = 1): Promise<number> {
   return runBoundedPool(concurrency, async () => (await processNextQueued(deps)) !== undefined);
+}
+
+/**
+ * Long-lived worker drain loop. Drains via the bounded pool, heartbeats its leases on in-flight jobs,
+ * recovers orphans via reapAndPublish, idles on pollMs when empty, and resolves when `signal` aborts.
+ */
+export async function runWorkerLoop(
+  deps: WorkerDeps,
+  opts: { concurrency: number; heartbeatMs: number; pollMs: number; signal: AbortSignal },
+): Promise<void> {
+  let pendingRenew: Promise<unknown> = Promise.resolve();
+  const beat = setInterval(() => {
+    if (deps.lease) {
+      pendingRenew = deps.store
+        .renewLease(deps.lease.workerId, deps.clock() + deps.lease.ttlMs)
+        .catch(() => {}); // ignore post-shutdown errors (pool may be tearing down)
+    }
+  }, opts.heartbeatMs);
+  try {
+    while (!opts.signal.aborted) {
+      const processed = await drainQueue(deps, opts.concurrency);
+      await reapAndPublish(deps, { leaseMaxAttempts: deps.lease?.maxAttempts });
+      if (opts.signal.aborted) break;
+      if (processed === 0) {
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, opts.pollMs);
+          opts.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+        });
+      }
+    }
+  } finally {
+    clearInterval(beat);
+    await pendingRenew; // drain the last in-flight heartbeat so it can't reject after the loop resolves
+  }
 }

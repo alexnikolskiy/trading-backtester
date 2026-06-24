@@ -41,6 +41,7 @@ export interface AppHandles {
   store: JobStore;
   dataPort: BacktesterDataPort;
   artifactStore: ArtifactStore;
+  workerDeps: WorkerDeps;
   drain: () => Promise<number>;
   reap: () => Promise<unknown>;
   deliverOutbox: () => Promise<number>;
@@ -163,6 +164,7 @@ export async function buildApp(config: AppConfig, overrides: BuildAppOptions = {
     store,
     dataPort,
     artifactStore,
+    workerDeps,
     drain,
     reap,
     deliverOutbox: flushOutbox,
