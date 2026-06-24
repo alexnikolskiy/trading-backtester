@@ -33,7 +33,7 @@ import { runBacktest } from '../runner/run-backtest';
 import { SandboxModuleExecutor, type SandboxConfig } from '../sandbox/sandbox-executor';
 import type { BundleStore } from '../sandbox/bundle-store';
 import type { OverlaySandboxSettings } from '../config';
-import { publishCompletion, type CompletionDeps } from './completion';
+import { publishCompletion, reapAndPublish, type CompletionDeps } from './completion';
 import type { JobRow, JobStore } from './job-store';
 import { overlayTapeCache, momentumTapeCache, tapeCacheKey } from '../data/tape-cache.js';
 import { runBoundedPool } from './pool.js';
@@ -306,4 +306,32 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
 /** Drain queued jobs with up to `concurrency` runs in flight (default 1 = serial). Returns count processed. */
 export async function drainQueue(deps: WorkerDeps, concurrency = 1): Promise<number> {
   return runBoundedPool(concurrency, async () => (await processNextQueued(deps)) !== undefined);
+}
+
+/**
+ * Long-lived worker drain loop. Drains via the bounded pool, heartbeats its leases on in-flight jobs,
+ * recovers orphans via reapAndPublish, idles on pollMs when empty, and resolves when `signal` aborts.
+ */
+export async function runWorkerLoop(
+  deps: WorkerDeps,
+  opts: { concurrency: number; heartbeatMs: number; pollMs: number; signal: AbortSignal },
+): Promise<void> {
+  const beat = setInterval(() => {
+    if (deps.lease) void deps.store.renewLease(deps.lease.workerId, deps.clock() + deps.lease.ttlMs);
+  }, opts.heartbeatMs);
+  try {
+    while (!opts.signal.aborted) {
+      const processed = await drainQueue(deps, opts.concurrency);
+      await reapAndPublish(deps);
+      if (opts.signal.aborted) break;
+      if (processed === 0) {
+        await new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, opts.pollMs);
+          opts.signal.addEventListener('abort', () => { clearTimeout(t); resolve(); }, { once: true });
+        });
+      }
+    }
+  } finally {
+    clearInterval(beat);
+  }
 }
