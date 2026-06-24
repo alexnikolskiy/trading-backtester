@@ -66,4 +66,14 @@ describe('AsyncIpcChannel', () => {
     await p;
     expect(ch.stderrText()).toContain('boom');
   });
+
+  it('truncates stderr beyond maxStderrBytes', async () => {
+    const { ch, stderr, stdout } = mk();
+    stderr.write('z'.repeat(400));
+    const p = ch.receive(Date.now() + 200);
+    stdout.write('{"t":"ok","decisions":[]}\n');
+    await p;
+    expect(ch.stderrText()).toContain('…[truncated]');
+    expect(ch.stderrText().length).toBeLessThanOrEqual('z'.repeat(256).length + '…[truncated]'.length);
+  });
 });
