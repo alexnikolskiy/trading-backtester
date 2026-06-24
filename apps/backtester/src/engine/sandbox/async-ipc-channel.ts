@@ -23,6 +23,10 @@ export class AsyncIpcChannel {
     stderr: Readable,
     private readonly limits: ResourceLimits,
   ) {
+    // A fire-and-forget send() can race container teardown; without this an EBADF/EPIPE on
+    // stdin would surface as an UNCAUGHT 'error' and crash the host. Swallow it (the round-trip
+    // fails via receive()'s eof/timeout path, which is the real signal).
+    stdin.on('error', () => { /* late write after close — already handled via receive() */ });
     stdout.on('data', (chunk: Buffer) => {
       this.stdoutTotal += chunk.length;
       if (this.stdoutTotal > this.limits.maxStdoutBytes) {

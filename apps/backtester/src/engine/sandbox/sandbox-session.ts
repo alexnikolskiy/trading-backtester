@@ -5,7 +5,6 @@
 // вызов инжектирует свежий read-only snapshot (state не пересекает границу). Любое нарушение →
 // fail-closed: контейнер убивается, последующие вызовы немедленно возвращают пустой результат + код.
 
-import { closeSync } from 'node:fs';
 import type { StrategyContext } from '@trading/research-contracts/research';
 import type { ModuleBundle } from './bundle.js';
 import type { SandboxPolicy } from '../sandbox-policy.js';
@@ -179,10 +178,13 @@ export class SandboxSession {
     if (c === undefined) return;
     this.container = undefined;
     this.channel = undefined;
+    // Close stdin THROUGH the stream (not closeSync on a raw fd): the AsyncIpcChannel holds a
+    // live Writable over child.stdin, so closing the bare fd underneath it left a dangling
+    // socket on a reused fd → EBADF cross-talk into the next session's container.
     try {
-      closeSync(c.stdinFd);
+      c.child.stdin.destroy();
     } catch {
-      /* already closed */
+      /* already torn down */
     }
     this.driver.kill(c.name);
     this.driver.remove(c.name);
