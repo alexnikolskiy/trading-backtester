@@ -6,6 +6,7 @@ import {
   type PerMinuteProrateFundingModel,
 } from '../src/engine/profiles';
 import { ExecutionSimulator } from '../src/engine/execution';
+import { Portfolio } from '../src/engine/portfolio';
 
 describe('REALISM_EXEC profile + funding-model catalog', () => {
   it('per_minute_prorate is the only supported funding kind (closed catalog)', () => {
@@ -39,5 +40,20 @@ describe('ExecutionSimulator — funding accessors + guard', () => {
   it('rejects an unknown fundingModel.kind (fail-fast, no silent fallback)', () => {
     const bad = { ...REALISM_EXEC, fundingModel: { kind: 'continuous_apr', intervalHours: 8 } };
     expect(() => new ExecutionSimulator(bad)).toThrow(/funding/i);
+  });
+});
+
+describe('Portfolio.chargeFunding', () => {
+  it('positive cost reduces cash; equityAt(flat) reflects it', () => {
+    const p = new Portfolio(1000);
+    p.chargeFunding(2.5);
+    expect(p.cash).toBeCloseTo(997.5, 8);
+    expect(p.equityAt(123)).toBeCloseTo(997.5, 8); // flat → equity == cash
+  });
+
+  it('negative cost (credit) increases cash', () => {
+    const p = new Portfolio(1000);
+    p.chargeFunding(-1.25);
+    expect(p.cash).toBeCloseTo(1001.25, 8);
   });
 });
