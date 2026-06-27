@@ -55,7 +55,7 @@ describe('compareBacktestRuns', () => {
   });
 
   it('rejected-прогон → не эквивалентен', () => {
-    const rej = { status: 'rejected', validation: { issues: [] } } as RunOutcome;
+    const rej = { status: 'rejected', validation: { status: 'rejected' as const, issues: [] } } as RunOutcome;
     expect(compareBacktestRuns(rej, completed([])).equivalent).toBe(false);
   });
 });
