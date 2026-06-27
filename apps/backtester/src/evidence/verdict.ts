@@ -19,7 +19,7 @@ export const DEFAULT_THRESHOLDS: EvidenceThresholds = {
 
 /** Missing metric ⇒ failed (conservative). Metric names match engine computeMetrics output. */
 export function decideVerdict(
-  metrics: Record<string, number>,
+  metrics: Readonly<Record<string, number | undefined>>,
   thresholds: EvidenceThresholds = DEFAULT_THRESHOLDS,
 ): 'passed' | 'failed' {
   const sharpe = metrics.sharpe;
