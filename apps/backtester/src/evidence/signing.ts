@@ -38,7 +38,7 @@ export function loadSigningKeyFromPem(privateKeyPem: string): SigningKey {
 }
 
 /** Detached Ed25519 signature (base64) over canonical(body). */
-export function signEvidence(body: unknown, privateKey: KeyObject): { body: unknown; signature: string } {
+export function signEvidence<T>(body: T, privateKey: KeyObject): { body: T; signature: string } {
   const signature = cryptoSign(null, Buffer.from(canonicalizeEvidenceBody(body), 'utf8'), privateKey)
     .toString('base64');
   return { body, signature };
