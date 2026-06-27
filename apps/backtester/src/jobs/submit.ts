@@ -65,7 +65,10 @@ function validate(req: RunSubmitRequest): void {
     if (!Array.isArray(req.metrics)) {
       throw new SubmitError(400, 'validation_error', 'metrics must be an array');
     }
-    const catalog = req.engine === 'overlay' ? VALID_OVERLAY_METRICS : VALID_METRICS;
+    if (req.engine === 'strategy' && req.metrics.length === 0) {
+      throw new SubmitError(400, 'validation_error', 'metrics must be a non-empty array');
+    }
+    const catalog = req.engine === 'overlay' || req.engine === 'strategy' ? VALID_OVERLAY_METRICS : VALID_METRICS;
     const unknown = req.metrics.filter((m) => !catalog.has(m));
     if (unknown.length > 0) {
       throw new SubmitError(400, 'validation_error', `unknown_metric: ${unknown.join(', ')}`);
