@@ -34,6 +34,7 @@ function isUnsafePath(path: string): boolean {
 /** The engine selected for a run must match the declared module kind. */
 function engineMatchesKind(engine: BacktestEngine, kind: ModuleKind): boolean {
   if (engine === 'overlay') return kind === 'overlay';
+  if (engine === 'strategy') return kind === 'strategy';
   // 'momentum' engine consumes strategy modules.
   return kind === 'strategy';
 }

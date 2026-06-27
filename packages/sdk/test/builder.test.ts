@@ -44,6 +44,30 @@ describe('SDK builder', () => {
     expect(report.status).toBe('accepted');
   });
 
+  it('engine "strategy" accepts only kind:"strategy"', () => {
+    const strategyInput = {
+      id: 'strategy-1',
+      version: '1.0.0',
+      kind: 'strategy' as const,
+      name: 'Strategy one',
+      summary: 's',
+      rationale: 'r',
+      hooks: [] as const,
+      paramsSchema: { type: 'object' },
+      capabilities: { platformSdk: true },
+      dataNeeds: { closedCandlesUpToCurrent: true },
+    };
+    const manifest = createModuleManifest(strategyInput);
+    const bundle = createModuleBundle({ manifest, entry: 'i.js', files: { 'i.js': 'export default () => ({})' } });
+    const report = preflightValidateBundle(bundle, { engine: 'strategy' });
+    expect(report.status).toBe('accepted');
+
+    // Reject when engine doesn't match kind
+    const rejectReport = preflightValidateBundle(bundle, { engine: 'overlay' });
+    expect(rejectReport.status).toBe('rejected');
+    expect(rejectReport.issues.some((i) => i.code === 'unsupported_module_kind')).toBe(true);
+  });
+
   it('preflight rejects an entry not in files', () => {
     const manifest = createModuleManifest(manifestInput);
     const bundle = createModuleBundle({ manifest, entry: 'missing.js', files: { 'i.js': 'x' } });

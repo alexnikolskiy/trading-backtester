@@ -13,7 +13,7 @@ export type {
 
 import type { ModuleManifest } from '@trading-platform/sdk/research-contract';
 
-export type BacktestEngine = 'momentum' | 'overlay';
+export type BacktestEngine = 'momentum' | 'overlay' | 'strategy';
 
 /**
  * Bundle-layer manifest: the kernel module manifest plus the SDK bundle-wire-format version.
