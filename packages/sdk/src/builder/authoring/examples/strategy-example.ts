@@ -9,7 +9,7 @@ import { createModuleManifest } from '../../manifest';
  */
 export const STRATEGY_EXAMPLE_SOURCE = `// Self-contained strategy bundle (FR-003): no imports, pre-built ESM, deterministic.
 // Entry convention: default-export a factory returning the lifecycle module.
-export default function createStrategyModule() {
+export default function createStrategyModule(params) {
   return {
     // Flat phase: enter long on a lookback breakout, gated by RSI.
     onBarClose(ctx) {

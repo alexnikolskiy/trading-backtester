@@ -51,4 +51,19 @@ describe('SDK builder', () => {
     expect(report.status).toBe('rejected');
     expect(report.issues.some((i) => i.code === 'bundle_entrypoint_invalid')).toBe(true);
   });
+
+  it.each([
+    '/abs.js',
+    './rel.js',
+    'a/../b.js',
+    'a\\b.js',
+    'f\0.js',
+    '../escape.js',
+  ])('preflight rejects unsafe path %j', (unsafe) => {
+    const manifest = createModuleManifest(manifestInput);
+    const bundle = createModuleBundle({ manifest, entry: unsafe, files: { [unsafe]: 'x' } });
+    const report = preflightValidateBundle(bundle, { engine: 'overlay' });
+    expect(report.status).toBe('rejected');
+    expect(report.issues.some((i) => i.code === 'bundle_entrypoint_invalid')).toBe(true);
+  });
 });
