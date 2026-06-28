@@ -78,6 +78,32 @@ const scope: EvidenceScope = {
   timeframe: baselineReq.timeframe,
 };
 
+// ── H2 guard: non-Docker negative test (fires before materializeBundle) ──────────────────────────
+describe('produceStrategyEvidenceForBundle — H2 bundleBytes guard (no Docker required)', () => {
+  it('throws when bundleBytes do not match inlineBundle entry file', async () => {
+    const key = generateSigningKey();
+    const mismatchedBytes = Buffer.from('esm-bundle-bytes-placeholder');
+    const input: StrategyEvidenceDriverInput = {
+      inlineBundle,
+      bundleBytes: mismatchedBytes,
+      dataset: {
+        datasetRef: baselineReq.datasetRef,
+        symbols: baselineReq.symbols,
+        timeframe: baselineReq.timeframe,
+        period: baselineReq.period,
+      },
+      baselineRequest: baselineReq,
+      scope,
+      key,
+      backtesterRunId: 'test-driver-h2-guard',
+      dataPort: new FixtureDataPort(FIXTURES_DIR),
+    };
+    await expect(produceStrategyEvidenceForBundle(input)).rejects.toThrow(
+      'bundleBytes do not match inlineBundle entry file',
+    );
+  });
+});
+
 describe.skipIf(!DOCKER_AVAILABLE)(
   'produceStrategyEvidenceForBundle — short_after_pump driver (Docker)',
   () => {

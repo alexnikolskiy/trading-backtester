@@ -11,7 +11,8 @@
 // flat ESM that is Buffer.from(inlineBundle.files[inlineBundle.entry], 'utf8')). `bundleHash` =
 // sha256BundleRef(input.bundleBytes) inside produceStrategyEvidence (lab-pinned raw bytes; NOT
 // recomputed from bundleDir — cross-boundary contract: lab-pinned raw bytes, not a
-// post-materialization re-hash of disk layout). (Fast-follow: assert that correspondence here.)
+// post-materialization re-hash of disk layout). Byte-equality between bundleBytes and the
+// inlineBundle entry file is asserted at the top of the driver (H2 consistency guard, enforced).
 //
 // SANDBOX-ROUTER WIRING: inlined verbatim from
 // test/helpers-overlay-sandbox.ts::buildSandboxStrategyBaselineDeps (that helper is test-only;
@@ -63,14 +64,34 @@ export interface StrategyEvidenceDriverInput {
  * End-to-end evidence driver: materialize one bundle, run both curated (trusted, in-process) and
  * candidate (strategy-route sandbox) backtests, then produce a signed ProduceStrategyResult.
  *
- * Single call-site for the gated bundle + signed bytes (byte↔bundle correspondence is the caller's
- * guarantee: `bundleBytes` must be the raw bytes of `inlineBundle`). bundleHash stays lab-pinned.
+ * H2 guard (at entry): asserts `bundleBytes` byte-equals `inlineBundle.files[entry]` encoded as
+ * UTF-8 — throws `'bundleBytes do not match inlineBundle entry file'` before any Docker work.
  *
+ * H1 guard (after candidate run, before compareBacktestRuns): captures `router.errors()` and
+ * throws `'sandbox execution failed: …'` with JSON detail if the sandbox crashed, so a container
+ * failure surfaces as a clear error rather than an opaque equivalence divergence.
+ *
+ * bundleHash stays lab-pinned (sha256 of bundleBytes; NOT re-hashed from bundleDir).
  * `finally`: cleanup materialized dir + close sandbox router (deterministic docker rm -f).
  */
 export async function produceStrategyEvidenceForBundle(
   input: StrategyEvidenceDriverInput,
 ): Promise<ProduceStrategyResult> {
+  // ── (H2) bundleBytes ↔ inlineBundle entry consistency guard ────────────────────────────────
+  // For Variant-2 flat self-contained ESM the raw bytes ARE the entry-file content encoded UTF-8.
+  // Throws before any Docker work — safe to call in non-Docker test environments.
+  const entryStr = input.inlineBundle.files[input.inlineBundle.entry];
+  if (entryStr == null) {
+    throw new Error(
+      `inlineBundle.files has no entry "${input.inlineBundle.entry}" — malformed bundle`,
+    );
+  }
+  if (!Buffer.from(input.bundleBytes).equals(Buffer.from(entryStr, 'utf8'))) {
+    throw new Error(
+      'bundleBytes do not match inlineBundle entry file — caller must pass the raw bytes of the bundle',
+    );
+  }
+
   // ── (1) materialize inline bundle → temp dir (world-readable for sandbox 'nobody') ──────────
   const sp = await materializeBundle(input.inlineBundle);
 
@@ -107,6 +128,14 @@ export async function produceStrategyEvidenceForBundle(
       { ...input.baselineRequest, engine: 'strategy' },
       { registry: buildInlineOverlayRegistry([], [bundle]), marketTape, router },
     );
+
+    // ── (H1) surface sandbox errors before compareBacktestRuns ───────────────────────────────────
+    // Captured BEFORE finally's router.closeAll() so live executor errors are visible.
+    // A sandbox crash would otherwise silently produce 0 trades → opaque equivalence divergence.
+    const sandboxErrors = router.errors();
+    if (sandboxErrors.length > 0) {
+      throw new Error('sandbox execution failed: ' + JSON.stringify(sandboxErrors));
+    }
 
     // ── (7) produce signed evidence ──────────────────────────────────────────────────────────────
     // bundleBytes = input.bundleBytes (lab-pinned); NOT recomputed from sp.bundleDir.
