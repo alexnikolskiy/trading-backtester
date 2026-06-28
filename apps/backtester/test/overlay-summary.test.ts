@@ -85,6 +85,6 @@ describe('toOverlaySummary', () => {
       'sha256:hh' as ContentHash,
       'fp',
     );
-    expect(summary.evidenceRef).toBeUndefined();
+    expect(summary).not.toHaveProperty('evidenceRef');
   });
 });

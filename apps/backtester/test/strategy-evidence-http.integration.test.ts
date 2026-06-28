@@ -47,9 +47,10 @@ describe.skipIf(!DOCKER_AVAILABLE)(
           const bundle = loadBundle('short-after-pump.bundle.json');
           const runId = 'strat-evidence-1';
 
-          // Use evidence-pump-1m: flat warmup (bars 0-19 at 100) → 12% pump at bar 20 (vol 2M) →
-          // retracement to 105 (bars 21-29). Strategy enters short at 112, closes at 105 → profit.
-          // This guarantees sharpe>0, winRate>0, total_trades>=1 → verdict='passed'.
+          // Use evidence-fixture-1m: flat warmup (bars 0-19 at 100) → 15% pump at bar 20
+          // (close 115, vol 2M) → decline to 91 by bar 29. Strategy enters short on the pump,
+          // price falls → profitable short, guaranteeing sharpe>0, winRate>0, total_trades>=1
+          // → verdict='passed'. (Reuses the Track-B evidence fixture — no per-test duplicate.)
           const res = await app.server.inject({
             method: 'POST',
             url: '/v1/runs',
@@ -59,7 +60,7 @@ describe.skipIf(!DOCKER_AVAILABLE)(
               runId,
               engine: 'strategy',
               moduleBundle: bundle,
-              datasetRef: 'evidence-pump-1m',
+              datasetRef: 'evidence-fixture-1m',
               metrics: ['pnl', 'win_rate'],
               curatedBaselineRef: { id: 'short_after_pump', version: '0.1.0' },
             },
