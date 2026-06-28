@@ -316,10 +316,11 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
             backtesterRunId: runId,
           });
           const evidenceHash = await deps.artifactStore.write(result.artifact);
-          evidenceRef = { artifactId: evidenceHash, artifactType: 'backtest-evidence', availability: 'available' };
-        } catch {
+          evidenceRef = { artifactId: evidenceHash, artifactType: 'backtest-evidence/v1', availability: 'available' };
+        } catch (err) {
           // gate-reject / non-equivalent / verdict != passed → additive: leave evidenceRef undefined,
           // the run still completes with resultHash intact. (Do NOT rethrow.)
+          console.warn(`[evidence] strategy run ${runId}: evidence not produced: ${err instanceof Error ? err.message : String(err)}`);
           evidenceRef = undefined;
         }
       }
