@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../src/config';
 
-
 describe('dataSource config', () => {
   it('defaults to the in-process fixture reader when no env is set', () => {
     expect(loadConfig({}).dataSource).toBe('fixture');
