@@ -1,7 +1,7 @@
 import type { ModuleKind } from '../../contracts/module';
 
 /** Bumped whenever the authoring contract (forms/fields/conventions) changes. */
-export const AUTHORING_DOC_VERSION = '1.0.0';
+export const AUTHORING_DOC_VERSION = '1.1.0';
 
 export const STRATEGY_AUTHORING_DOC = `# Authoring a strategy bundle
 
@@ -35,10 +35,70 @@ A strategy bundle is a single **self-contained ESM** file. It must:
 - \`ctx.data.closedCandles(lookback)\`: closed bars strictly before the current bar (as-of).
 - \`ctx.data.indicatorAsOf(name)\`: scalar indicator as-of, or undefined in warmup.
 - \`ctx.indicators.query({ name, params?, source? })\`: per-bar indicator value, undefined in warmup.
-- \`ctx.market?\`: point-in-time open interest / liquidations / funding / taker flow (present only
-  when the tape carries that data).
+- \`ctx.market?\`: point-in-time market-tape surface (OI / liquidations / funding / taker), present
+  only when the tape carries that data — see "Runtime market data" below for the exact methods.
 - \`ctx.params\`: the manifest \`params\` payload.
 - \`ctx.clock.now()\`, \`ctx.rng.next()\`: deterministic clock + seeded RNG.
+
+## Runtime market data — \`ctx.market\` (PointInTimeMarketApi)
+
+\`ctx.market\` is the point-in-time market-tape surface for the current closed bar (minute \`t\`).
+Read-only, structurally no-lookahead (\`ts ≤ t\`, no forward methods). It is present only when the
+tape carries that data — guard \`if (!ctx.market) return { kind: 'idle' };\`.
+
+**These are METHODS, not fields.** OI is an object \`{ oiTotalUsd }\`, not a scalar.
+
+### Open interest & liquidations (present when the tape carries OI / liq)
+
+- \`ctx.market.oiAsOf(): OiPoint | undefined\` — OI for minute \`t\`; \`undefined\` on a gap.
+- \`ctx.market.oiWindow(lookback): readonly (OiPoint | undefined)[]\` — last \`lookback\` minute
+  buckets ending AT \`t\` inclusive (index \`len-1\` = minute \`t\`); length = \`min(lookback, available)\`.
+- \`ctx.market.liqAsOf(): LiqPoint | undefined\`
+- \`ctx.market.liqWindow(lookback): readonly (LiqPoint | undefined)[]\`
+
+    interface OiPoint  { ts: number; oiTotalUsd: number }
+    interface LiqPoint { ts: number; longUsd: number; shortUsd: number }
+
+### Gap semantics (read carefully)
+
+- A window slot may be \`undefined\` — that minute is a gap. NO carry-forward: never reuse the
+  previous value across a gap.
+- \`liqAsOf()\` → \`undefined\` on a gap, but \`{ longUsd: 0, shortUsd: 0 }\` on a covered minute with
+  no liquidations (covered-no-events). \`undefined\` (missing) and \`{0,0}\` (real "no liquidations")
+  are DIFFERENT — branch on them separately.
+
+### Funding & taker (optional — present only when the tape carries them; guard the method)
+
+These return a 3-state reading object, NOT \`Point | undefined\`:
+
+- \`ctx.market.fundingAsOf?(): FundingReading\`
+  = \`{ state:'present'|'stale', point:{ ts, fundingRate } } | { state:'missing' }\`
+  (\`stale\` = bounded live-forward, still a real snapshot; \`missing\` = no snapshot, NOT zero).
+- \`ctx.market.fundingWindow?(lookback): readonly (FundingPoint | undefined)[]\`
+- \`ctx.market.takerAsOf?(): TakerReading\`
+  = \`{ state:'present', point:{ ts, buyUsd, sellUsd } } | { state:'stale' } | { state:'missing' }\`
+  (present-zero \`{ buyUsd:0, sellUsd:0 }\` is real "no flow"; \`missing\` is a gap).
+- \`ctx.market.takerWindow?(lookback): readonly (TakerPoint | undefined)[]\`
+
+Read a reading via its \`state\`:
+
+    const r = ctx.market.fundingAsOf?.();
+    const rate = r?.state === 'present' ? r.point.fundingRate : undefined;
+
+### Candles
+
+- \`ctx.data.closedCandles(lookback): readonly Bar[]\` — closed bars strictly before the current bar.
+
+### ❌ before → ✅ after
+
+    // ❌ these fields DO NOT EXIST — always undefined → your condition is always false
+    ctx.market.openInterest        ctx.market.oi
+    ctx.market.liquidations.long
+
+    // ✅ read OI / liq through the methods
+    const oi     = ctx.market?.oiAsOf()?.oiTotalUsd;         // number | undefined
+    const liqL   = ctx.market?.liqAsOf()?.longUsd;           // number | undefined (0 = covered-no-events)
+    const oiPrev = ctx.market?.oiWindow(2)[0]?.oiTotalUsd;   // one minute back, or undefined on gap
 
 ## Decision forms (StrategyDecision)
 
