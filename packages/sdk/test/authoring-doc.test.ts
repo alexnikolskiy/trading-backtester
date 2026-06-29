@@ -13,6 +13,33 @@ describe('authoring docs', () => {
     expect(STRATEGY_AUTHORING_DOC).toContain('bundleContractVersion');
   });
 
+  it('strategy doc documents the runtime market-tape API (methods, not fields)', () => {
+    // the four core methods + reading types
+    expect(STRATEGY_AUTHORING_DOC).toContain('oiAsOf');
+    expect(STRATEGY_AUTHORING_DOC).toContain('oiWindow');
+    expect(STRATEGY_AUTHORING_DOC).toContain('liqAsOf');
+    expect(STRATEGY_AUTHORING_DOC).toContain('liqWindow');
+    expect(STRATEGY_AUTHORING_DOC).toContain('FundingReading');
+    expect(STRATEGY_AUTHORING_DOC).toContain('TakerReading');
+    // point shapes
+    expect(STRATEGY_AUTHORING_DOC).toContain('oiTotalUsd');
+    // gap semantics: undefined vs covered-zero must be called out
+    expect(STRATEGY_AUTHORING_DOC).toContain('covered-no-events');
+    // before/after anti-pattern: the nonexistent field the LLM guessed
+    expect(STRATEGY_AUTHORING_DOC).toContain('ctx.market.openInterest');
+  });
+
+  it('renders without template-literal escaping artifacts (no literal backslash-backtick)', () => {
+    // toContain checks above use substrings and would NOT catch a mis-escaped backtick.
+    // The rendered doc an LLM sees must contain real backticks, never the literal sequence backslash-backtick.
+    expect(getAuthoringDoc('strategy')).not.toContain('\\`');
+    expect(getAuthoringDoc('overlay')).not.toContain('\\`');
+  });
+
+  it('bumps the authoring doc version for the market-tape addition', () => {
+    expect(AUTHORING_DOC_VERSION).toBe('1.1.0');
+  });
+
   it('overlay doc documents apply + OverlayDecision', () => {
     expect(OVERLAY_AUTHORING_DOC).toContain('apply');
     expect(OVERLAY_AUTHORING_DOC).toContain('veto');
