@@ -1,9 +1,14 @@
-// Task 7 — abort-before-sign evidence flow for the strategy-route twin (short_after_pump).
+// Task 7 — evidence flow for the strategy-route twin (short_after_pump).
 //
-// Order (abort-before-sign):
+// Two failure classes, deliberately distinct:
+//   - BREAKAGE (gate rejected / twin-divergence / incomplete run) ⇒ throw (abort-before-sign).
+//   - VERDICT 'failed' (real metrics miss DEFAULT_THRESHOLDS) ⇒ return as DATA (signed:false, full
+//     metrics, NO artifact) for the research loop. Never a throw — but never a signature either.
+//
+// Order:
 //   1. acceptance-gate  validateBundle  → rejected   ⇒ throw (no evidence)
 //   2. twin-equivalence compareBacktestRuns → !equivalent ⇒ throw (bar + diff)
-//   3. metrics → verdict !== 'passed'             ⇒ throw (NEVER sign except from real metrics)
+//   3. metrics → verdict: 'passed' ⇒ sign; 'failed' ⇒ return signed:false (NEVER sign non-passing)
 //   4. sign: sha256BundleRef → buildEvidenceBody → signEvidence → serializeArtifact/artifactRef
 
 import { platformContractContext } from '@trading/research-contracts/research';
@@ -32,24 +37,34 @@ export interface StrategyEvidenceInput {
 }
 
 export interface ProduceStrategyResult {
-  readonly artifact: SignedBacktestEvidence;
-  readonly artifactRef: string;
-  /** 'sha256:<hex64>' of bundleBytes. */
+  /** True ⟺ a signed artifact was produced ⟺ verdict 'passed' (invariant: never sign non-passing). */
+  readonly signed: boolean;
+  /** Real verdict from computeMetrics→decideVerdict on the candidate run. */
+  readonly verdict: 'passed' | 'failed';
+  /** Candidate metrics (sharpe/max_drawdown/win_rate/total_trades) — returned regardless of verdict. */
+  readonly metrics: Readonly<Record<string, number | undefined>>;
+  /** 'sha256:<hex64>' of bundleBytes — computed regardless of verdict. */
   readonly bundleHash: string;
-  readonly keyId: string;
-  /** Always 'passed': the function throws on any non-'passed' verdict before returning. */
-  readonly verdict: 'passed';
+  /** The verified scope — echoed back so the research loop has the full result as data. */
+  readonly scope: EvidenceScope;
+  /** Present ONLY when signed (verdict 'passed'). Absent on a failed verdict — never sign non-passing. */
+  readonly artifact?: SignedBacktestEvidence;
+  readonly artifactRef?: string;
+  readonly keyId?: string;
 }
 
 /**
- * Full lifecycle proof: abort-before-sign gate → twin-equivalence → verdict → sign.
+ * Full lifecycle proof: gate → twin-equivalence → verdict → (sign | return).
  *
  * Signs ONLY when all three pre-conditions pass:
  *   - acceptance-gate accepted the bundle (019/017 integrity + contract version + manifest)
  *   - curated and candidate are byte-equivalent (same result_hash + no per-trade field divergence)
  *   - real computeMetrics → decideVerdict yields 'passed'
  *
- * Every failure throws before the signing step — no artifact is emitted on any failure path.
+ * Breakages (gate rejected / twin-divergence / incomplete candidate) throw before signing. A 'failed'
+ * verdict is NOT a breakage: it returns a ProduceStrategyResult with signed:false + full metrics and
+ * no artifact (research-loop consumable). The "never sign a non-passing verdict" invariant holds in
+ * both paths — a signature is produced only on 'passed'.
  */
 export function produceStrategyEvidence(input: StrategyEvidenceInput): ProduceStrategyResult {
   // ── (1) acceptance-gate ──────────────────────────────────────────────────────
@@ -84,10 +99,17 @@ export function produceStrategyEvidence(input: StrategyEvidenceInput): ProduceSt
     input.candidate.baseline.trades,
   );
   const verdict = decideVerdict(metrics);
-  if (verdict !== 'passed') throw new Error(`verdict ${verdict} — not signing`);
+  const bundleHash = sha256BundleRef(input.bundleBytes);
+
+  // Verdict 'failed' is a LEGITIMATE judgement on real metrics — NOT a breakage. The research loop
+  // needs it as data, so return (don't throw) with signed:false, full metrics, bundleHash + scope,
+  // and NO artifact. Breakages above (gate rejected / twin-divergence / incomplete run) still throw.
+  // INVARIANT preserved: a non-passing verdict produces no signature.
+  if (verdict !== 'passed') {
+    return { signed: false, verdict, metrics, bundleHash, scope: input.scope };
+  }
 
   // ── (4) sign ─────────────────────────────────────────────────────────────────
-  const bundleHash = sha256BundleRef(input.bundleBytes);
   const body = buildEvidenceBody({
     backtesterRunId: input.backtesterRunId,
     bundleHash,
@@ -97,10 +119,13 @@ export function produceStrategyEvidence(input: StrategyEvidenceInput): ProduceSt
   });
   const artifact = signEvidence(body, input.key.privateKey) as SignedBacktestEvidence;
   return {
+    signed: true,
+    verdict,
+    metrics,
+    bundleHash,
+    scope: input.scope,
     artifact,
     artifactRef: artifactRef(serializeArtifact(artifact)),
-    bundleHash,
     keyId: input.key.keyId,
-    verdict,
   };
 }
