@@ -172,13 +172,16 @@ The core product flow is closed. What's left:
 
 ### Phase C — throughput and multi-tenant scaling
 
+Detailed analysis and decision context: [`2026-07-01-backtester-throughput-scaling-analysis.md`](superpowers/specs/2026-07-01-backtester-throughput-scaling-analysis.md).
+
 6. **Horizontal workers first:** split API and workers in deployment. Run API with `BACKTESTER_AUTO_WORKER=false`; run many `worker-main.ts` replicas against the same `DATABASE_URL`. The current Pg queue (`claimNextQueued` with `FOR UPDATE SKIP LOCKED`) already supports this; keep in-memory store for tests/dev only.
 7. **Kubernetes scaling model:** start with long-lived worker `Deployment` + KEDA `ScaledObject` driven by queued-job depth. Use `ScaledJob` only after adding a worker-once mode that drains a bounded batch and exits; the current worker loop is intentionally long-lived.
 8. **Shared state before extra replicas:** move bundles/artifacts from host-local file stores to a cluster-visible store (S3/MinIO/NFS/CSI volume) before spreading workers across nodes. Keep content-addressed artifact semantics and deterministic `result_hash` intact.
 9. **Capacity controls:** prefer low per-Pod `WORKER_CONCURRENCY` (often 1-2) and scale Pod count. Budget actual pressure as `worker_concurrency * symbols_per_run * sandbox_cpus/memory`, because sandbox sessions are per module+symbol and Docker daemon contention can become the node bottleneck.
-10. **Fingerprint-based dedup:** add result/in-flight coalescing keyed by request fingerprint + bundle hash + dataset fingerprint + engine/runtime version. Existing `requestFingerprint` is suitable as the run-affecting input key, but cached materialization must account for `runId` being part of current outcomes/result hashes.
-11. **Stronger sandbox isolation later:** evaluate gVisor/Kata/Firecracker only after the horizontal Docker worker path is proven. Preserve the current sandbox contract: no network/secrets, read-only mounts, resource-limit error taxonomy, deterministic cleanup, and stable IPC behavior.
-12. **Temporal later, for workflows not raw speed:** introduce Temporal only when the product becomes multi-step durable orchestration (generate strategy -> backtest -> evaluate -> re-prompt -> evidence), not as a replacement for the current Pg job queue.
+10. **Tenant fairness and quotas:** add per-tenant/user queue limits, concurrency caps, and cancellation/expiry policy before opening this as a shared SaaS surface. The global Pg queue can stay shared, but admission and scheduling must prevent one tenant from monopolizing worker capacity.
+11. **Fingerprint-based dedup:** add result/in-flight coalescing keyed by request fingerprint + bundle hash + dataset fingerprint + engine/runtime version. Existing `requestFingerprint` is suitable as the run-affecting input key, but cached materialization must account for `runId` being part of current outcomes/result hashes.
+12. **Stronger sandbox isolation later:** evaluate gVisor/Kata/Firecracker only after the horizontal Docker worker path is proven. Preserve the current sandbox contract: no network/secrets, read-only mounts, resource-limit error taxonomy, deterministic cleanup, and stable IPC behavior.
+13. **Temporal later, for workflows not raw speed:** introduce Temporal only when the product becomes multi-step durable orchestration (generate strategy -> backtest -> evaluate -> re-prompt -> evidence), not as a replacement for the current Pg job queue.
 
 ## Definition of Done
 
