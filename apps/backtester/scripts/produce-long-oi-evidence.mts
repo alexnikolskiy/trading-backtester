@@ -217,20 +217,28 @@ async function main(): Promise<void> {
 
     const outDir = resolve(HERE, '../.evidence-out');
     mkdirSync(outDir, { recursive: true });
-    writeFileSync(join(outDir, `${result.artifactRef.replace(':', '_')}.json`), serializeArtifact(result.artifact));
-    writeFileSync(join(outDir, 'signer.pub.json'), JSON.stringify({ keyId: key.keyId, publicKeyPem: key.publicKeyPem }, null, 2));
-    // Audit trail (NOT part of the signed body, which is fixed schema): records the sandbox policy
-    // the candidate ran under so a verifier can audit the isolation profile behind the evidence.
-    writeFileSync(join(outDir, `${result.artifactRef.replace(':', '_')}.audit.json`), JSON.stringify(
-      { artifactRef: result.artifactRef, bundleHash: result.bundleHash, verdict: result.verdict, keyId: result.keyId, sandboxPolicyId, symbols: win.symbols, window: { fromMs: win.fromMs, toMs: win.toMs } },
-      null,
-      2,
-    ));
-    console.log(JSON.stringify(
-      { artifactRef: result.artifactRef, bundleHash: result.bundleHash, verdict: result.verdict, keyId: result.keyId, sandboxPolicyId, symbols: win.symbols, window: { fromMs: win.fromMs, toMs: win.toMs } },
-      null,
-      2,
-    ));
+    // Research-loop output: ALWAYS emit the result (verdict + metrics), signed or not. A signed
+    // artifact + pubkey are written ONLY when result.signed (verdict 'passed') — никогда не подписываем
+    // непройденный verdict. На signed:false пишем только audit-сводку (метрики для решения «что дальше»).
+    const tag = (result.artifactRef ?? `unsigned-${result.bundleHash}`).replace(':', '_');
+    const summary = {
+      signed: result.signed,
+      verdict: result.verdict,
+      metrics: result.metrics,
+      artifactRef: result.artifactRef ?? null,
+      bundleHash: result.bundleHash,
+      keyId: result.keyId ?? null,
+      sandboxPolicyId,
+      symbols: win.symbols,
+      window: { fromMs: win.fromMs, toMs: win.toMs },
+    };
+    if (result.signed && result.artifact !== undefined) {
+      writeFileSync(join(outDir, `${tag}.json`), serializeArtifact(result.artifact));
+      writeFileSync(join(outDir, 'signer.pub.json'), JSON.stringify({ keyId: key.keyId, publicKeyPem: key.publicKeyPem }, null, 2));
+    }
+    // Audit trail (NOT part of the signed body): metrics + verdict + sandbox policy for the research loop.
+    writeFileSync(join(outDir, `${tag}.audit.json`), JSON.stringify(summary, null, 2));
+    console.log(JSON.stringify(summary, null, 2));
   } finally {
     router.closeAll();
     await sp.cleanup();

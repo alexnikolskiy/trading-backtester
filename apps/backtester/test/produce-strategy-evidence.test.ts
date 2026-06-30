@@ -64,7 +64,11 @@ const WINNING_TRADE = makeTrade(1, 101, 1);
 const REF = { id: 'default', version: '1.0.0' };
 
 let _runSeq = 0;
-function makeRunOutcome(trades: readonly Trade[], runId?: string): RunOutcome {
+function makeRunOutcome(
+  trades: readonly Trade[],
+  runId?: string,
+  equity: readonly EquityPoint[] = EQUITY,
+): RunOutcome {
   _runSeq += 1;
   return {
     status: 'completed',
@@ -94,7 +98,7 @@ function makeRunOutcome(trades: readonly Trade[], runId?: string): RunOutcome {
         simulatedOrders: [],
         simulatedFills: [],
         riskDecisions: [],
-        equityCurve: EQUITY,
+        equityCurve: equity,
         deferredRobustness: [],
       },
     },
@@ -144,9 +148,49 @@ describe('produceStrategyEvidence (abort-before-sign)', () => {
     });
 
     expect(r.verdict).toBe('passed');
+    expect(r.signed).toBe(true);
+    expect(r.artifact).toBeDefined();
     // verifySignedEvidenceLocal returns { ok: boolean }
-    expect(verifySignedEvidenceLocal(r.artifact, { [key.keyId]: key.publicKeyPem }).ok).toBe(true);
+    expect(verifySignedEvidenceLocal(r.artifact!, { [key.keyId]: key.publicKeyPem }).ok).toBe(true);
     expect(r.bundleHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(r.metrics.total_trades).toBe(1);
+  });
+
+  // ── case (d) ────────────────────────────────────────────────────────────────
+  // Verdict failed = a legitimate judgement on REAL metrics (not a breakage). The research loop must
+  // receive it as data: returned (NOT thrown), signed:false, full metrics, NO artifact. The
+  // "never sign non-passing" invariant holds — no signature is produced on a failed verdict.
+  it('verdict failed (real metrics) → returns data with signed:false + metrics, NO artifact, NO throw', () => {
+    const key = generateSigningKey();
+    // Monotone-down equity → sharpe < 0 (≤ minSharpe:0); losing trade → win_rate 0 (≤ minWinRate:0).
+    const DOWN: readonly EquityPoint[] = [
+      { barIndex: 0, barTs: 0, equity: 10_000 },
+      { barIndex: 1, barTs: 60_000, equity: 9_900 },
+      { barIndex: 2, barTs: 120_000, equity: 9_800 },
+    ];
+    const losingTrade = makeTrade(1, 99, -1);
+    // Same outcome for curated & candidate → twin-equivalence passes; only the verdict fails.
+    const outcome = makeRunOutcome([losingTrade], 'run-fail', DOWN);
+
+    const r = produceStrategyEvidence({
+      bundle: acceptedBundle,
+      bundleBytes: Buffer.from('esm-bundle-bytes'),
+      curated: outcome,
+      candidate: outcome,
+      scope: SCOPE,
+      key,
+      backtesterRunId: 'bt-test-d',
+    });
+
+    expect(r.signed).toBe(false);
+    expect(r.verdict).toBe('failed');
+    expect(r.artifact).toBeUndefined();
+    expect(r.artifactRef).toBeUndefined();
+    // Full metrics + bundleHash + scope are returned as data for the research loop.
+    expect(r.bundleHash).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(r.metrics.total_trades).toBe(1);
+    expect(typeof r.metrics.sharpe).toBe('number');
+    expect(r.scope).toEqual(SCOPE);
   });
 
   // ── case (b) ────────────────────────────────────────────────────────────────

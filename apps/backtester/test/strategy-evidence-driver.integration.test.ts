@@ -141,8 +141,10 @@ describe.skipIf(!DOCKER_AVAILABLE)(
     });
 
     it('signed artifact verifies with the signing key', () => {
+      expect(result.signed).toBe(true);
+      expect(result.artifact).toBeDefined();
       expect(
-        verifySignedEvidenceLocal(result.artifact, { [key.keyId]: key.publicKeyPem }).ok,
+        verifySignedEvidenceLocal(result.artifact!, { [key.keyId]: key.publicKeyPem }).ok,
       ).toBe(true);
     });
   },

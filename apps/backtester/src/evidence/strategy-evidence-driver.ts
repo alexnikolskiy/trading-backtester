@@ -2,7 +2,8 @@
 //
 // Orchestrates the full chain from ONE inline bundle source:
 //   materialize → loadBundle (gated) → buildOverlayDataset → curated run → candidate run →
-//   produceStrategyEvidence → signed ProduceStrategyResult.
+//   produceStrategyEvidence → ProduceStrategyResult (signed when verdict 'passed'; on a 'failed'
+//   verdict the result is returned with signed:false + metrics, no artifact — never sign non-passing).
 //
 // SINGLE CALL-SITE: the gated `bundle` (materialized from `input.inlineBundle`) and the signed
 // `bundleBytes` arrive on ONE call, so byte↔bundle correspondence is established at a single point
@@ -62,7 +63,8 @@ export interface StrategyEvidenceDriverInput {
 
 /**
  * End-to-end evidence driver: materialize one bundle, run both curated (trusted, in-process) and
- * candidate (strategy-route sandbox) backtests, then produce a signed ProduceStrategyResult.
+ * candidate (strategy-route sandbox) backtests, then produce a ProduceStrategyResult (signed on a
+ * 'passed' verdict; signed:false + metrics, no artifact, on a 'failed' verdict — never sign non-passing).
  *
  * H2 guard (at entry): asserts `bundleBytes` byte-equals `inlineBundle.files[entry]` encoded as
  * UTF-8 — throws `'bundleBytes do not match inlineBundle entry file'` before any Docker work.
