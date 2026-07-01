@@ -4,6 +4,7 @@
 import { buildApp, type AppHandles } from './app.js';
 import { loadConfig, type AppConfig } from './config.js';
 import { runWorkerLoop } from './jobs/worker.js';
+import { startWorkerHealthServer } from './jobs/worker-health.js';
 import { pathToFileURL } from 'node:url';
 
 export function assertWorkerConfig(config: AppConfig): void {
@@ -23,6 +24,16 @@ async function main(): Promise<void> {
   const deps = app.workerDeps; // exposed by buildApp (Step 4)
   const lease = { workerId: config.workerId, ttlMs: config.workerLeaseTtlMs, maxAttempts: config.workerMaxAttempts };
 
+  let loopDone = false;
+  let draining = false;
+  const health =
+    config.workerHealthPort !== undefined
+      ? await startWorkerHealthServer(config.workerHealthPort, {
+          live: () => !loopDone,
+          ready: () => !draining,
+        })
+      : undefined;
+
   // eslint-disable-next-line no-console
   console.log(`trading-backtester worker ${config.workerId} draining (concurrency=${config.workerConcurrency})`);
   const loop = runWorkerLoop(
@@ -33,12 +44,16 @@ async function main(): Promise<void> {
       pollMs: config.workerPollMs,
       signal: ac.signal,
     },
-  );
+  ).finally(() => {
+    loopDone = true;
+  });
 
   const shutdown = async (): Promise<void> => {
+    draining = true; // readiness → 503 immediately; liveness stays 200 during graceful drain
     ac.abort();
     await loop;
     await app.dispose();
+    await health?.close();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown());

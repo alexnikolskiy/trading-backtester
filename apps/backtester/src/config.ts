@@ -92,6 +92,8 @@ export interface AppConfig {
   readonly workerMaxAttempts: number;
   /** Idle poll interval (ms) when the queue is empty. */
   readonly workerPollMs: number;
+  /** Optional TCP port for the worker health server (/healthz + /readyz). Unset ⇒ no server. */
+  readonly workerHealthPort?: number;
   /** Enable the lifted overlay engine path (engine:'overlay' runs). Default off until the verify_018 parity gate is green. */
   readonly enableOverlayEngine: boolean;
   readonly sandbox: SandboxSettings;
@@ -149,6 +151,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   );
   const maxAttempts = Math.max(1, Math.floor(Number(env.WORKER_MAX_ATTEMPTS ?? 3)) || 3);
   const pollMs = Math.max(50, Math.floor(Number(env.WORKER_POLL_MS ?? 500)) || 500);
+  const workerHealthPortRaw = env.WORKER_HEALTH_PORT ? Number(env.WORKER_HEALTH_PORT) : undefined;
+  const workerHealthPort =
+    workerHealthPortRaw !== undefined && Number.isFinite(workerHealthPortRaw)
+      ? Math.floor(workerHealthPortRaw)
+      : undefined;
   const workerId = env.WORKER_ID ?? `${hostname()}:${process.pid}`;
   const storeBackend: 'filesystem' | 's3' = env.BACKTESTER_STORE_BACKEND === 's3' ? 's3' : 'filesystem';
   let s3: S3Settings | undefined;
@@ -209,6 +216,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workerHeartbeatMs: heartbeat,
     workerMaxAttempts: maxAttempts,
     workerPollMs: pollMs,
+    ...(workerHealthPort !== undefined ? { workerHealthPort } : {}),
     enableOverlayEngine: env.BACKTESTER_ENABLE_OVERLAY_ENGINE === 'true',
     ...(env.BT_EVIDENCE_SIGNING_KEY ? { evidenceSigningKeyPem: env.BT_EVIDENCE_SIGNING_KEY } : {}),
     sandbox: {
