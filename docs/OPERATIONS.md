@@ -140,3 +140,46 @@ Feature 6 is satisfied when:
 - Cross-repo parity gates are named, scripted, and listed above.
 - Demo stack smoke + cross-repo E2E are one-command (`make smoke`, `make cross-repo-e2e`).
 - Release ordering is explicit so agents and humans land contract changes before consumers.
+
+## Horizontal scaling (Phase C foundation)
+
+Split API and workers, share the queue (Postgres) and object store (S3-compatible), and let KEDA
+scale workers from queue depth. Reference manifests: [`deploy/k8s/examples/`](../deploy/k8s/examples/).
+
+### Deployment split
+- **API node:** `BACKTESTER_AUTO_WORKER=false`; readiness/liveness `GET /health`.
+- **Worker nodes:** run `worker-main.ts`; require `DATABASE_URL`; set a unique `WORKER_ID` (pod name),
+  low `WORKER_CONCURRENCY` (1–2), and `WORKER_HEALTH_PORT` for `/healthz` (liveness) + `/readyz`
+  (readiness; drops to 503 on SIGTERM during graceful drain).
+
+### Object store (S3-compatible — MinIO first-class)
+Set `BACKTESTER_STORE_BACKEND=s3` and:
+
+| Env | MinIO (first-class) | AWS S3 |
+|---|---|---|
+| `BACKTESTER_S3_ENDPOINT` | `http://minio:9000` | regional endpoint |
+| `BACKTESTER_S3_BUCKET` | `backtester` | your bucket |
+| `BACKTESTER_S3_REGION` | any (e.g. `us-east-1`) | the bucket region |
+| `BACKTESTER_S3_ACCESS_KEY` / `_SECRET_KEY` | from `Secret` | from `Secret` |
+| `BACKTESTER_S3_FORCE_PATH_STYLE` | `true` | `false` |
+
+`S3` here means the S3 **protocol/API**, not the AWS vendor — the same code runs against MinIO, Ceph
+RGW, Cloudflare R2, or AWS S3. Default backend is `filesystem` (dev/CI). `@aws-sdk/client-s3` is an
+optional dependency imported only on the S3 path.
+
+### KEDA scaling
+Scale the worker Deployment with a KEDA `ScaledObject` on queue depth
+(`SELECT count(*) FROM backtest_job WHERE status = 'queued'`). DB credentials go through a
+`TriggerAuthentication` + `Secret`, never plaintext. Use `ScaledObject` (long-lived worker), **not**
+`ScaledJob` — that needs a worker-once mode we have not built.
+
+### Capacity budget
+Sandbox sessions are per module+symbol on each node's Docker daemon. Size and cap replicas with:
+
+```
+peak sandbox memory ≈ max_pods × WORKER_CONCURRENCY × avg_symbols_per_run × sandbox_memory_mb
+peak sandbox CPU    ≈ max_pods × WORKER_CONCURRENCY × avg_symbols_per_run × sandbox_cpus
+```
+
+Prefer many modest workers over few large ones, and set KEDA `maxReplicaCount` from these formulas so
+you do not exhaust a node's Docker daemon.
