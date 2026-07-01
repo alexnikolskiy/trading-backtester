@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { buildServer } from './api/server';
 import type { AppConfig } from './config';
-import { FileArtifactStore, type ArtifactStore } from './artifacts/store';
+import type { ArtifactStore } from './artifacts/store';
 import { FixtureDataPort, type BacktesterDataPort } from './data/reader';
 import { HttpDataPort } from './data/http-data-port';
 import { RowsDataPort } from './data/rows-data-port';
@@ -23,8 +23,9 @@ import { InMemoryJobStore, type JobStore } from './jobs/job-store';
 import { PgJobStore } from './jobs/pg-job-store';
 import { drainQueue, type WorkerDeps } from './jobs/worker';
 import { loadSigningKeyFromPem, type SigningKey } from './evidence/signing.js';
-import { FileBundleStore, type BundleStore } from './sandbox/bundle-store';
+import type { BundleStore } from './sandbox/bundle-store';
 import type { SandboxConfig } from './sandbox/sandbox-executor';
+import { createArtifactStore, createBundleStore } from './storage/stores';
 
 export interface BuildAppOptions {
   store?: JobStore;
@@ -81,8 +82,8 @@ export async function buildApp(config: AppConfig, overrides: BuildAppOptions = {
           ...(config.mockPlatformToken ? { token: config.mockPlatformToken } : {}),
         })
       : new FixtureDataPort(config.fixturesDir));
-  const artifactStore = overrides.artifactStore ?? new FileArtifactStore(config.artifactsDir);
-  const bundleStore = overrides.bundleStore ?? new FileBundleStore(config.bundlesDir);
+  const artifactStore = overrides.artifactStore ?? (await createArtifactStore(config));
+  const bundleStore = overrides.bundleStore ?? (await createBundleStore(config));
   const clock = overrides.clock ?? ((): number => Date.now());
   const uid = overrides.uid ?? ((): string => randomUUID());
   const postWebhook = overrides.postWebhook ?? defaultWebhookPoster();
