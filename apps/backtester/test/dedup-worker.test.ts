@@ -188,6 +188,52 @@ describe('worker dedup gate — momentum', () => {
     expect(a?.status).toBe('failed');
     expect(putSpy).not.toHaveBeenCalled();
   });
+
+  it('evidence run (curatedBaselineRef set) bypasses dedup entirely: no lookup, no populate; still completes', async () => {
+    const { store, cache, deps } = makeCtx({ dedupEnabled: true });
+    const lookupSpy = vi.spyOn(cache, 'lookup');
+    const putSpy = vi.spyOn(cache, 'put');
+
+    // Momentum IGNORES curatedBaselineRef (no bundle ⇒ no evidence produced), but the dedup gate reads
+    // it and must force fresh compute: the signed evidenceRef only exists on the miss path and is NOT
+    // part of computeIdentity, so a HIT would silently drop it. So: no lookup, no populate.
+    const evidenceReq = { ...REQ, curatedBaselineRef: { id: 'baseline', version: '1.0.0' } };
+    await store.insertOrGet({ ...momentumJob('run-EVID0001'), request: evidenceReq as never });
+    await store.transition('run-EVID0001', 'accepted', 'queued', { atMs: CLOCK, queuedAtMs: CLOCK });
+
+    const r = await processNextQueued(deps);
+    expect(r?.status).toBe('completed');
+    expect(lookupSpy).not.toHaveBeenCalled();
+    expect(putSpy).not.toHaveBeenCalled();
+  });
+
+  it('unreadable template ⇒ recompute (best-effort), NOT failed: a shared HIT whose template read throws falls through to fresh compute', async () => {
+    const { store, deps } = makeCtx({ dedupEnabled: true });
+    const runSpy = vi.spyOn(runBacktestModule, 'runBacktest');
+
+    // First run populates the cache normally.
+    await enqueue(store, 'run-AAAAAAAA');
+    const a = await processNextQueued(deps);
+    expect(a?.status).toBe('completed');
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    // Now simulate a shared/durable HIT (PgResultCache) for a template that lives only on another
+    // worker's disk: read throws. write still delegates so the recompute can persist + re-populate.
+    const inner = deps.artifactStore;
+    deps.artifactStore = {
+      write: (payload) => inner.write(payload),
+      has: (ref) => inner.has(ref),
+      read: async () => {
+        throw new Error('template not present on this host');
+      },
+    };
+
+    runSpy.mockClear();
+    await enqueue(store, 'run-BBBBBBBB');
+    const b = await processNextQueued(deps); // lookup HITs, read throws → best-effort recompute
+    expect(runSpy).toHaveBeenCalledTimes(1); // fell through to fresh compute
+    expect(b?.status).toBe('completed'); // NOT failed — a cache MUST degrade to recompute
+  });
 });
 
 // -------------------------------------------------------------------------------------------------

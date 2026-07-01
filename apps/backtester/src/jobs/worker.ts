@@ -351,7 +351,10 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
 
     // ── DEDUP GATE ────────────────────────────────────────────────────────────
     // dedup engages only when the kill-switch is on AND a cache is wired.
-    const dedupOn = deps.dedupEnabled === true && deps.resultCache !== undefined;
+    // Evidence runs (curatedBaselineRef set) MUST always compute fresh: the signed evidenceRef is produced
+    // only on the miss path and is NOT part of computeIdentity, so a HIT would silently drop it. Bypass
+    // dedup entirely for them (no lookup, no populate).
+    const dedupOn = deps.dedupEnabled === true && deps.resultCache !== undefined && claimed.request.curatedBaselineRef === undefined;
     // bypassCache skips the LOOKUP (force fresh) but a fresh successful run STILL populates below.
     const doLookup = dedupOn && claimed.request.bypassCache !== true;
     let sandboxPolicyVersion = '';
@@ -371,13 +374,21 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
       });
       const hit = await deps.resultCache!.lookup(identity);
       if (hit) {
-        const template = (await deps.artifactStore.read(hit.templateRef as ContentHash)) as DedupTemplate;
-        if (template.engine === engine && template.templateVersion === DEDUP_TEMPLATE_VERSION) {
-          // Cache HIT: re-stamp the cached template under this runId. Deliberately performs NONE of
-          // sandboxBundleFor / executorFor / router / engine — the whole point of dedup.
-          const payload = restamp(template, runId);
-          finalized = await finalizeResult(deps, engine, payload, claimed, dsFingerprint);
-          dedupedFrom = hit.computeIdentity;
+        try {
+          const template = (await deps.artifactStore.read(hit.templateRef as ContentHash)) as DedupTemplate;
+          if (template.engine === engine && template.templateVersion === DEDUP_TEMPLATE_VERSION) {
+            // Cache HIT: re-stamp the cached template under this runId. Deliberately performs NONE of
+            // sandboxBundleFor / executorFor / router / engine — the whole point of dedup.
+            const payload = restamp(template, runId);
+            finalized = await finalizeResult(deps, engine, payload, claimed, dsFingerprint);
+            dedupedFrom = hit.computeIdentity;
+          }
+          // else: shape/engine/version mismatch → leave finalized undefined → miss path recomputes.
+        } catch {
+          // A shared/durable cache (PgResultCache) can return a HIT for a template that lives only on
+          // another worker's disk (host-local FileArtifactStore) → read throws. A cache MUST degrade to
+          // recompute, never hard-fail: leave finalized undefined and fall through to the miss path.
+          finalized = undefined;
         }
       }
     }

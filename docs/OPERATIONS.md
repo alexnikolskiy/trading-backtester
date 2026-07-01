@@ -205,6 +205,9 @@ successfully. Off by default — a pure opt-in.
   version bump is the mechanism.
 - **Bypass:** a per-request `bypassCache` flag forces fresh compute for that run; the fresh result
   still populates the cache for subsequent identical requests.
+- **Evidence runs always compute fresh:** a request with `curatedBaselineRef` set (evidence/admission
+  flow) bypasses the cache entirely — no lookup and no populate — because the signed `evidenceRef` is
+  produced only on the miss path and is not part of the cache identity, so a HIT would silently drop it.
 - **`result_hash` is unchanged:** it is re-stamped per run regardless of cache hit/miss — dedup affects
   compute, not the result-hash contract.
 - **Accepted partial (bundle-carrying runs):** a HIT on a run that carries a strategy bundle still
