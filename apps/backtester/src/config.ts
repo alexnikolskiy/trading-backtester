@@ -8,6 +8,7 @@ import {
   type SandboxPolicy,
 } from './engine/sandbox-policy';
 import { mountConfigFor } from './engine/sandbox/mounts';
+import type { S3Settings } from './storage/s3-client';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +53,10 @@ export interface AppConfig {
   readonly artifactsDir: string;
   /** Content-addressed module-bundle registry root. */
   readonly bundlesDir: string;
+  /** Object-store backend for artifacts + bundles. Default 'filesystem' (host-local, dev/CI). */
+  readonly storeBackend: 'filesystem' | 's3';
+  /** S3-compatible settings; present only when storeBackend === 's3'. */
+  readonly s3?: S3Settings;
   /**
    * Historical data source: in-process fixture reader, the networked Research Historical Data API
    * (`http`), or the canonical `/historical/rows` rows port (`mock`/`real`). `mock` and `real` are
@@ -87,6 +92,8 @@ export interface AppConfig {
   readonly workerMaxAttempts: number;
   /** Idle poll interval (ms) when the queue is empty. */
   readonly workerPollMs: number;
+  /** Optional TCP port for the worker health server (/healthz + /readyz). Unset ⇒ no server. */
+  readonly workerHealthPort?: number;
   /** Enable the lifted overlay engine path (engine:'overlay' runs). Default off until the verify_018 parity gate is green. */
   readonly enableOverlayEngine: boolean;
   readonly sandbox: SandboxSettings;
@@ -144,7 +151,48 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   );
   const maxAttempts = Math.max(1, Math.floor(Number(env.WORKER_MAX_ATTEMPTS ?? 3)) || 3);
   const pollMs = Math.max(50, Math.floor(Number(env.WORKER_POLL_MS ?? 500)) || 500);
+  const workerHealthPortRaw = env.WORKER_HEALTH_PORT ? Number(env.WORKER_HEALTH_PORT) : undefined;
+  const workerHealthPort =
+    workerHealthPortRaw !== undefined && Number.isFinite(workerHealthPortRaw)
+      ? Math.floor(workerHealthPortRaw)
+      : undefined;
   const workerId = env.WORKER_ID ?? `${hostname()}:${process.pid}`;
+  const rawStoreBackend = env.BACKTESTER_STORE_BACKEND;
+  if (rawStoreBackend && rawStoreBackend !== 'filesystem' && rawStoreBackend !== 's3') {
+    throw new Error(
+      `invalid BACKTESTER_STORE_BACKEND '${rawStoreBackend}' (expected 'filesystem' or 's3')`,
+    );
+  }
+  const storeBackend: 'filesystem' | 's3' = rawStoreBackend === 's3' ? 's3' : 'filesystem';
+  let s3: S3Settings | undefined;
+  if (storeBackend === 's3') {
+    const endpoint = env.BACKTESTER_S3_ENDPOINT;
+    const bucket = env.BACKTESTER_S3_BUCKET;
+    const accessKeyId = env.BACKTESTER_S3_ACCESS_KEY;
+    const secretAccessKey = env.BACKTESTER_S3_SECRET_KEY;
+    const missing = (
+      [
+        ['BACKTESTER_S3_ENDPOINT', endpoint],
+        ['BACKTESTER_S3_BUCKET', bucket],
+        ['BACKTESTER_S3_ACCESS_KEY', accessKeyId],
+        ['BACKTESTER_S3_SECRET_KEY', secretAccessKey],
+      ] as const
+    )
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    if (missing.length) {
+      throw new Error(`store backend 's3' requires ${missing.join(', ')}`);
+    }
+    s3 = {
+      endpoint: endpoint!,
+      bucket: bucket!,
+      accessKeyId: accessKeyId!,
+      secretAccessKey: secretAccessKey!,
+      // MinIO is the first-class target: default true unless explicitly disabled (AWS ⇒ 'false').
+      forcePathStyle: env.BACKTESTER_S3_FORCE_PATH_STYLE !== 'false',
+      ...(env.BACKTESTER_S3_REGION ? { region: env.BACKTESTER_S3_REGION } : {}),
+    };
+  }
   return {
     host: env.BACKTESTER_HOST ?? '127.0.0.1',
     port: Number(env.BACKTESTER_PORT ?? 8080),
@@ -152,6 +200,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     fixturesDir: env.BACKTESTER_FIXTURES_DIR ?? resolve(HERE, '../fixtures/candles'),
     artifactsDir: env.BACKTESTER_ARTIFACTS_DIR ?? resolve(HERE, '../.data/artifacts'),
     bundlesDir: env.BACKTESTER_BUNDLES_DIR ?? resolve(HERE, '../.data/bundles'),
+    storeBackend,
+    ...(s3 ? { s3 } : {}),
     dataSource:
       env.BACKTESTER_DATA_SOURCE === 'http'  ? 'http'    :
       env.BACKTESTER_DATA_SOURCE === 'mock'  ? 'mock'    :
@@ -172,6 +222,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     workerHeartbeatMs: heartbeat,
     workerMaxAttempts: maxAttempts,
     workerPollMs: pollMs,
+    ...(workerHealthPort !== undefined ? { workerHealthPort } : {}),
     enableOverlayEngine: env.BACKTESTER_ENABLE_OVERLAY_ENGINE === 'true',
     ...(env.BT_EVIDENCE_SIGNING_KEY ? { evidenceSigningKeyPem: env.BT_EVIDENCE_SIGNING_KEY } : {}),
     sandbox: {
