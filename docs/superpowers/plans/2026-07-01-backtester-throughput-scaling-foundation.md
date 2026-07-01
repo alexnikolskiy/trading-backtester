@@ -893,6 +893,15 @@ In `apps/backtester/package.json`, add a top-level block (after `dependencies`):
   }
 ```
 
+Then update and commit the lockfile so a frozen install (CI + the Dockerfile's first
+install) does not fail with `ERR_PNPM_OUTDATED_LOCKFILE`:
+
+Run: `pnpm install` (regenerates `pnpm-lock.yaml` — additive: the `@aws-sdk/client-s3` tree)
+Verify: `pnpm install --frozen-lockfile --ignore-scripts` — Expected: PASS (no `ERR_PNPM_OUTDATED_LOCKFILE`)
+Commit `pnpm-lock.yaml` together with `package.json`. (`@aws-sdk/client-s3` in `optionalDependencies`
+IS installed by pnpm on a normal install; the widened dynamic import keeps it out of the compile-time
+graph, and the default `filesystem` backend never uses it.)
+
 - [ ] **Step 2: Write `deploy/k8s/examples/api-deployment.yaml`**
 
 ```yaml
