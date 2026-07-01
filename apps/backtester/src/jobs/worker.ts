@@ -31,7 +31,8 @@ import type { SandboxExecutorDeps } from '../engine/sandbox/sandbox-executor';
 import { toOverlaySummary } from './overlay-summary';
 import { RunnerError } from '../runner/errors';
 import { TrustedMomentumExecutor, type ModuleExecutor } from '../runner/module-executor';
-import { runBacktest } from '../runner/run-backtest';
+import { runBacktest, type BacktestResult } from '../runner/run-backtest';
+import type { RunOutcome } from '../engine/artifacts';
 import { SandboxModuleExecutor, type SandboxConfig } from '../sandbox/sandbox-executor';
 import type { BundleStore } from '../sandbox/bundle-store';
 import type { OverlaySandboxSettings } from '../config';
@@ -118,6 +119,62 @@ export function overlaySandboxDeps(s: OverlaySandboxSettings): SandboxExecutorDe
   return { harnessDir, mount };
 }
 
+type Engine = 'momentum' | 'overlay' | 'strategy';
+
+interface Finalized {
+  summary: RunResultSummary;
+  manifest: ArtifactManifest;
+  resultHash: ContentHash;
+}
+
+/**
+ * Post-payload finalize: persist artifacts + build the wire RunResultSummary + resultHash. Pure move
+ * of the per-branch tail — momentum uses persistRunArtifacts + the inline momentum summary; overlay
+ * and strategy use persistOverlayArtifacts + toOverlaySummary. `resultHash = contentRef(payload)`.
+ */
+async function finalizeResult(
+  deps: WorkerDeps,
+  engine: Engine,
+  payload: unknown,
+  claimed: JobRow,
+  datasetFingerprint: string,
+  evidenceRef?: ArtifactReference,
+): Promise<Finalized> {
+  const resultHash = contentRef(payload);
+  if (engine === 'momentum') {
+    const result = payload as BacktestResult;
+    const persisted = await persistRunArtifacts(deps.artifactStore, result, datasetFingerprint);
+    const summary: RunResultSummary = {
+      runId: claimed.runId,
+      status: 'completed',
+      metrics: result.metrics,
+      artifactRefs: persisted.artifactRefs,
+      evidence: {
+        seed: claimed.effectiveSeed,
+        contractVersion: API_CONTRACT_VERSION,
+        moduleVersions: [claimed.request.moduleRef],
+        datasetRef: claimed.datasetRef,
+        datasetFingerprint,
+        ...(claimed.bundleHash !== undefined ? { bundleHash: claimed.bundleHash } : {}),
+      },
+      resultHash,
+    };
+    return { summary, manifest: persisted.manifest, resultHash };
+  }
+  const outcome = payload as Extract<RunOutcome, { status: 'completed' }>;
+  const persisted = await persistOverlayArtifacts(deps.artifactStore, outcome, datasetFingerprint);
+  const summary = toOverlaySummary(
+    outcome,
+    claimed.runId,
+    persisted.artifactRefs,
+    resultHash,
+    datasetFingerprint,
+    claimed.bundleHash,
+    evidenceRef,
+  );
+  return { summary, manifest: persisted.manifest, resultHash };
+}
+
 /** Claim and run one queued job. Returns the (now terminal) row, or undefined if the queue was empty. */
 export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | undefined> {
   const claimed = await deps.store.claimNextQueued(
@@ -200,21 +257,13 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
           `overlay run rejected: ${JSON.stringify(outcome.validation.issues)}`,
         );
       }
-      resultHash = contentRef(outcome);
-      const persisted = await persistOverlayArtifacts(
-        deps.artifactStore,
+      ({ summary, manifest, resultHash } = await finalizeResult(
+        deps,
+        'overlay',
         outcome,
+        claimed,
         dsFingerprint,
-      );
-      manifest = persisted.manifest;
-      summary = toOverlaySummary(
-        outcome,
-        runId,
-        persisted.artifactRefs,
-        resultHash,
-        dsFingerprint,
-        claimed.bundleHash,
-      );
+      ));
     } else if (claimed.request.engine === 'strategy') {
       // ===== STRATEGY PATH — kind:'strategy' lifecycle-bundle via sandbox (closes gap PR #57) =====
       if (claimed.bundleHash === undefined || sandboxBundle === undefined) {
@@ -281,10 +330,6 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
           `strategy run rejected: ${JSON.stringify(outcome.validation.issues)}`,
         );
       }
-      resultHash = contentRef(outcome);
-      const persisted = await persistOverlayArtifacts(deps.artifactStore, outcome, dsFingerprint);
-      manifest = persisted.manifest;
-
       // ── E4: evidence block (run-once, additive) ──────────────────────────────
       // Runs ONLY when curatedBaselineRef is set AND a signing key is present.
       // Any failure leaves evidenceRef undefined — the run still completes with resultHash.
@@ -325,15 +370,14 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
         }
       }
 
-      summary = toOverlaySummary(
+      ({ summary, manifest, resultHash } = await finalizeResult(
+        deps,
+        'strategy',
         outcome,
-        runId,
-        persisted.artifactRefs,
-        resultHash,
+        claimed,
         dsFingerprint,
-        claimed.bundleHash,
         evidenceRef,
-      );
+      ));
     } else {
       // ===== MOMENTUM PATH — unchanged (golden eff10116… must not move) =====
       executor = await executorFor(deps, claimed);
@@ -378,25 +422,13 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
         executor,
         ...(claimed.bundleHash !== undefined ? { bundleHash: claimed.bundleHash } : {}),
       });
-      const persisted = await persistRunArtifacts(deps.artifactStore, result, dsFingerprint);
-      manifest = persisted.manifest;
-      resultHash = contentRef(result);
-
-      summary = {
-        runId,
-        status: 'completed',
-        metrics: result.metrics,
-        artifactRefs: persisted.artifactRefs,
-        evidence: {
-          seed: request.seed,
-          contractVersion: API_CONTRACT_VERSION,
-          moduleVersions: [request.moduleRef],
-          datasetRef: request.datasetRef,
-          datasetFingerprint: dsFingerprint,
-          ...(claimed.bundleHash !== undefined ? { bundleHash: claimed.bundleHash } : {}),
-        },
-        resultHash,
-      };
+      ({ summary, manifest, resultHash } = await finalizeResult(
+        deps,
+        'momentum',
+        result,
+        claimed,
+        dsFingerprint,
+      ));
     }
 
     const now = deps.clock();
