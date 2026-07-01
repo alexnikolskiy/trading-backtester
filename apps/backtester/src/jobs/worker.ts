@@ -377,8 +377,10 @@ export async function processNextQueued(deps: WorkerDeps): Promise<JobRow | unde
         try {
           const template = (await deps.artifactStore.read(hit.templateRef as ContentHash)) as DedupTemplate;
           if (template.engine === engine && template.templateVersion === DEDUP_TEMPLATE_VERSION) {
-            // Cache HIT: re-stamp the cached template under this runId. Deliberately performs NONE of
-            // sandboxBundleFor / executorFor / router / engine — the whole point of dedup.
+            // Cache HIT: re-stamp the cached template under this runId. Performs NONE of executorFor /
+            // router / engine — the dedup win. (For a bundle-carrying run, sandboxBundleFor already ran
+            // in the pre-gate to preserve strategy validation error-taxonomy — the accepted partial;
+            // momentum HITs have no bundle and skip everything.)
             const payload = restamp(template, runId);
             finalized = await finalizeResult(deps, engine, payload, claimed, dsFingerprint);
             dedupedFrom = hit.computeIdentity;

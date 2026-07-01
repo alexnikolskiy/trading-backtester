@@ -355,7 +355,10 @@ describe.skipIf(!DOCKER_AVAILABLE)('worker dedup gate — strategy (bundle-carry
         const freshDeps = buildSandboxStrategyBaselineDeps({ spDir: spB.bundleDir });
         try {
           const fresh = await runStrategyModule.runStrategyBacktest(
-            { ...STRATEGY_REQ_BASE, runId: 'run-strat-BBBBBBBB', engine: 'strategy' },
+            // Must mirror the worker job's request EXACTLY (same metrics override) so contentRef(fresh)
+            // matches the deduped result B — otherwise the equivalence assertion compares two different
+            // engine requests.
+            { ...STRATEGY_REQ_BASE, runId: 'run-strat-BBBBBBBB', engine: 'strategy', metrics: ['pnl', 'win_rate'] },
             { registry: freshDeps.registry, marketTape, router: freshDeps.router },
           );
           expect(b?.resultHash).toBe(contentRef(fresh));
