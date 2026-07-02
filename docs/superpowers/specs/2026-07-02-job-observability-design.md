@@ -63,7 +63,7 @@ Derived durations (all integers, ms):
 |-----------------|----------------------------------|----------------------------------------|
 | `queueWaitMs`   | `tClaim − enqueuedAt`            | `enqueuedAt` from the claimed job row   |
 | `materializeMs` | `tMaterialized − tClaim`        | includes bundle load (pre-flight)       |
-| `engineMs`      | `tEngineDone − tMaterialized`   | `null` on a HIT / stale (engine skipped)|
+| `engineMs`      | `tEngineDone − tMaterialized`   | `null` on `hit` only; non-null on `miss`/`bypass`/`evidence_bypass`/`stale_recompute` (they all recompute) |
 | `totalMs`       | `tTerminal − tClaim`            | worker wall time for the job            |
 
 **Determinism guard (load-bearing):** every extra `deps.clock()` call is inside the
@@ -185,7 +185,9 @@ of this PR to avoid a `JobStore` surface change.
   `dedup` value (spy on `ObsRegistry.recordJob`). `hit`/`stale_recompute` reuse the existing
   dedup-worker test fixtures.
 - **Duration breakdown unit:** fake clock → assert `queueWaitMs`/`materializeMs`/`engineMs`/
-  `totalMs`; assert `engineMs` is null/absent on a HIT.
+  `totalMs`. `engineMs` is `null` **only** for `hit` (engine skipped); `stale_recompute`
+  has a non-null `engineMs` because it falls through to recompute (as do
+  `miss`/`bypass`/`evidence_bypass`).
 - **Flag-off invariant:** with `BACKTESTER_JOB_OBS` off — (i) no log line, (ii) `/statsz`
   404, and (iii) the `deps.clock()` call count is unchanged vs a baseline run (guards the
   goldens' determinism).
