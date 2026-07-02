@@ -213,3 +213,22 @@ successfully. Off by default — a pure opt-in.
 - **Accepted partial (bundle-carrying runs):** a HIT on a run that carries a strategy bundle still
   loads the bundle (needed to serve the response) but skips the expensive engine + sandbox execution.
   Momentum (non-bundle) HITs skip all compute, including bundle load.
+
+### Job observability (Phase C — dedup enablement)
+
+Set `BACKTESTER_JOB_OBS=true` (default off) to turn on minimal per-job observability. Two channels:
+
+- **Per-job terminal log line** — one JSON line per terminal job on stdout, e.g.
+  `{"evt":"job_terminal","runId":"…","engine":"momentum","outcome":"completed","dedup":"hit","queueWaitMs":12,"materializeMs":40,"engineMs":null,"totalMs":55,"ts":…}`.
+  `dedup` ∈ `off | evidence_bypass | bypass | hit | miss | stale_recompute`. `engineMs` is `null` only on a `hit`.
+  Aggregate with `jq`, e.g. hit-rate: `grep job_terminal | jq -s 'group_by(.dedup)|map({(.[0].dedup):length})'`.
+- **`/statsz`** — in-process counters (count/sum/max per phase, counts by outcome and dedup class) since process start,
+  served by the worker health server on `WORKER_HEALTH_PORT` (split-worker topology). Not aggregated across replicas
+  (the log line is the durable, cross-replica source of truth). Combined `AUTO_WORKER=true` mode has no `/statsz` in this
+  release — use the log line.
+
+Queue **depth** is not part of `/statsz`; query it directly:
+
+    SELECT status, count(*) FROM backtest_job GROUP BY status;
+
+`BACKTESTER_JOB_OBS=false` (default) emits nothing and adds no runtime overhead.
