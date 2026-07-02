@@ -221,7 +221,13 @@ Set `BACKTESTER_JOB_OBS=true` (default off) to turn on minimal per-job observabi
 - **Per-job terminal log line** — one JSON line per terminal job on stdout, e.g.
   `{"evt":"job_terminal","runId":"…","engine":"momentum","outcome":"completed","dedup":"hit","queueWaitMs":12,"materializeMs":40,"engineMs":null,"totalMs":55,"ts":…}`.
   `dedup` ∈ `off | evidence_bypass | bypass | hit | miss | stale_recompute`. `engineMs` is `null` only on a `hit`.
-  Aggregate with `jq`, e.g. hit-rate: `grep job_terminal | jq -s 'group_by(.dedup)|map({(.[0].dedup):length})'`.
+  **Interpret `dedup`/`engineMs` only for `outcome:"completed"` rows.** On a non-completed job (`failed`/`validation_error`)
+  these fields report how far the job got, not a cache decision: a job that throws before the engine emits `engineMs:null`
+  with whatever `dedup` class it had reached, and a job that fails before the dedup gate reports `dedup:"off"` even when
+  dedup is enabled. Filter to completed rows before computing hit-rate or engine time. `totalMs` is worker wall time from
+  claim to emit (includes post-run cleanup + the terminal store read), so it is slightly larger than claim→transition.
+  Aggregate with `jq`, e.g. hit-rate over completed jobs:
+  `grep job_terminal | jq -s 'map(select(.outcome=="completed"))|group_by(.dedup)|map({(.[0].dedup):length})'`.
 - **`/statsz`** — in-process counters (count/sum/max per phase, counts by outcome and dedup class) since process start,
   served by the worker health server on `WORKER_HEALTH_PORT` (split-worker topology). Not aggregated across replicas
   (the log line is the durable, cross-replica source of truth). Combined `AUTO_WORKER=true` mode has no `/statsz` in this
