@@ -178,19 +178,20 @@ Detailed analysis and decision context: [`2026-07-01-backtester-throughput-scali
 [`specs/2026-07-01-backtester-throughput-scaling-foundation-design.md`](superpowers/specs/2026-07-01-backtester-throughput-scaling-foundation-design.md)
 and [`plans/2026-07-01-backtester-throughput-scaling-foundation.md`](superpowers/plans/2026-07-01-backtester-throughput-scaling-foundation.md):
 S3-compatible shared store (MinIO first-class), first-class API/worker split with worker health
-probes, and K8s/KEDA reference manifests. Items 10–13 (quotas, dedup, stronger sandbox, Temporal)
-remain follow-up specs.
+probes, and K8s/KEDA reference manifests. Item 11 (dedup) shipped dark-launched (PR #73). Item 10
+(per-tenant quotas/fairness) is deferred to the multi-user gate. Items 12–13 (stronger sandbox,
+Temporal) remain follow-up specs.
 
 6. **Horizontal workers first:** split API and workers in deployment. Run API with `BACKTESTER_AUTO_WORKER=false`; run many `worker-main.ts` replicas against the same `DATABASE_URL`. The current Pg queue (`claimNextQueued` with `FOR UPDATE SKIP LOCKED`) already supports this; keep in-memory store for tests/dev only.
 7. **Kubernetes scaling model:** start with long-lived worker `Deployment` + KEDA `ScaledObject` driven by queued-job depth. Use `ScaledJob` only after adding a worker-once mode that drains a bounded batch and exits; the current worker loop is intentionally long-lived.
 8. **Shared state before extra replicas:** move bundles/artifacts from host-local file stores to a cluster-visible store (S3/MinIO/NFS/CSI volume) before spreading workers across nodes. Keep content-addressed artifact semantics and deterministic `result_hash` intact.
 9. **Capacity controls:** prefer low per-Pod `WORKER_CONCURRENCY` (often 1-2) and scale Pod count. Budget actual pressure as `worker_concurrency * symbols_per_run * sandbox_cpus/memory`, because sandbox sessions are per module+symbol and Docker daemon contention can become the node bottleneck.
-10. **Tenant fairness and quotas:** add per-tenant/user queue limits, concurrency caps, and cancellation/expiry policy before opening this as a shared SaaS surface. The global Pg queue can stay shared, but admission and scheduling must prevent one tenant from monopolizing worker capacity.
-11. 🚧 **IN PROGRESS — Fingerprint-based dedup:** add result/in-flight coalescing keyed by request fingerprint + bundle hash + dataset fingerprint + engine/runtime version. Existing `requestFingerprint` is suitable as the run-affecting input key, but cached materialization must account for `runId` being part of current outcomes/result hashes. Design spec:
+10. **Tenant fairness and quotas — ⏸️ DEFERRED (multi-user gate).** Not built now: today is single-user, so per-tenant quotas are **not** a foundation invariant and their absence blocks nothing. Explicitly deferred until *before public multi-user / paid SaaS*. Deliberately NOT doing now: tenant tables, fair scheduler, weighted queues, per-user admission control, queued/running caps. **Forward-compatibility hook (already in place, costs nothing):** the Pg queue is tenant-agnostic — global FIFO + `FOR UPDATE SKIP LOCKED` — so a future `tenantId` slots in as a `WHERE tenant = …` predicate without reworking ordering or claiming; do not couple admission/ordering to anything that would block that. When re-opened: add per-tenant/user queue limits, concurrency caps, and cancellation/expiry policy so one tenant can't monopolize worker capacity; the global Pg queue can stay shared.
+11. ✅ **SHIPPED (dark launch) — Fingerprint-based dedup:** worker-time completed-result cache keyed by request fingerprint + dataset fingerprint + `DEDUP_COMPUTE_VERSION` + sandbox policy version; a HIT re-stamps the cached outcome under the new `runId` (preserves the deterministic `result_hash` contract, proven by per-engine byte-equivalence goldens) and skips the engine/sandbox. Merged in PR #73 (`main` squash `5ab8a1f`), **`BACKTESTER_DEDUP_ENABLED` default off**. Design spec:
     [`specs/2026-07-01-backtester-result-dedup-design.md`](superpowers/specs/2026-07-01-backtester-result-dedup-design.md);
     plan: [`plans/2026-07-01-backtester-result-dedup.md`](superpowers/plans/2026-07-01-backtester-result-dedup.md).
-    `ResultCache` (in-memory + Pg) wired into `buildApp`/`WorkerDeps` behind `BACKTESTER_DEDUP_ENABLED`
-    (default off); see `OPERATIONS.md` § "Result dedup (Phase C item 11)".
+    `ResultCache` (in-memory + Pg) wired into `buildApp`/`WorkerDeps`; see `OPERATIONS.md` § "Result dedup (Phase C item 11)".
+    Follow-ups (not yet done): operational **enablement** in controlled mode, in-flight coalescing, submit-time fast-path, TTL/LRU pruning, split bundle-load so a bundle-HIT stops materializing the bundle.
 12. **Stronger sandbox isolation later:** evaluate gVisor/Kata/Firecracker only after the horizontal Docker worker path is proven. Preserve the current sandbox contract: no network/secrets, read-only mounts, resource-limit error taxonomy, deterministic cleanup, and stable IPC behavior.
 13. **Temporal later, for workflows not raw speed:** introduce Temporal only when the product becomes multi-step durable orchestration (generate strategy -> backtest -> evaluate -> re-prompt -> evidence), not as a replacement for the current Pg job queue.
 
